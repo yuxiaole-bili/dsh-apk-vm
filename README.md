@@ -1,6 +1,7 @@
 # APK Virtual Machine — a DeepSeek Harness plugin
 
 [![CI](https://github.com/yuxiaole-bili/dsh-apk-vm/actions/workflows/ci.yml/badge.svg)](https://github.com/yuxiaole-bili/dsh-apk-vm/actions/workflows/ci.yml)
+[![npm](https://img.shields.io/npm/v/dsh-apk-vm.svg)](https://www.npmjs.com/package/dsh-apk-vm)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 [![GitHub](https://img.shields.io/badge/github-yuxiaole--bili%2Fdsh--apk--vm-181717)](https://github.com/yuxiaole-bili/dsh-apk-vm)
 
@@ -23,9 +24,7 @@ same-origin, loopback-only debug HTTP API and an `apk_vm` Agent tool.
 
 **Status:** `0.3.13` · Apache-2.0 · no npm runtime dependencies · no build step.
 
-This is an open-source DSH plugin. The package is prepared for npm as **`dsh-apk-vm`**; the
-install command below uses that package name. If npm does not have the package yet, use the
-source fallback below. Repository:
+This is an open-source DSH plugin published on npm as **`dsh-apk-vm`**. Repository:
 [github.com/yuxiaole-bili/dsh-apk-vm](https://github.com/yuxiaole-bili/dsh-apk-vm).
 Maintainer: [yuxiaole-bili](https://github.com/yuxiaole-bili/).
 Please read [CONTRIBUTING.md](CONTRIBUTING.md), [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md),
@@ -41,7 +40,7 @@ the session.
 ## Install
 
 Install the published npm package (the command used by the DSH plugin center and the community
-market). If the package is not yet visible in your registry, use the source fallback below.
+market):
 
 ```bash
 dsh plugin --profile web add dsh-apk-vm
