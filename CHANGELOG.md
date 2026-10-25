@@ -18,6 +18,9 @@ Open-source package identity.
   <https://github.com/yuxiaole-bili/dsh-apk-vm>: `repository`, `homepage`, `bugs`, README
   badges/repository link, issue-template security/repository links, and the local `origin`
   remote.
+- Added the community-market submission package: one-line value, copyable source install
+  command, capability category, risk/permissions/compatibility section, real cropped
+  screenshots, and `docs/SUBMISSION.md` with the filled `dsh-plugin.org` issue template.
 
 ## 0.3.12
 

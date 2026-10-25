@@ -52,6 +52,8 @@
     "docs/README.md",
     "docs/RELEASING.md",
     "docs/PRIVACY.md",
+    "docs/SUBMISSION.md",
+    "docs/*.png",
     "scripts/privacy-scan.mjs",
     "locale/*.json",
     "icon.svg",

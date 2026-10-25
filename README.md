@@ -30,21 +30,97 @@ Please read [CONTRIBUTING.md](CONTRIBUTING.md), [CODE_OF_CONDUCT.md](CODE_OF_CON
 [SECURITY.md](SECURITY.md), [docs/PRIVACY.md](docs/PRIVACY.md) and [docs/RELEASING.md](docs/RELEASING.md) before opening issues or
 releasing.
 
+## One-line value
+
+Turn DeepSeek Harness into a local Android APK workbench: boot a rooted AOSP VM, preview it at
+up to 60 fps in the sidebar, and let Agents install, tap, inspect and debug APKs without leaving
+the session.
+
+## Install (source)
+
+This repository has no npm package yet, so the community-market source command is:
+
+```bash
+dsh plugin --profile web add github:yuxiaole-bili/dsh-apk-vm
+```
+
+For the DSH Desktop profile, install the same directory from **Plugins → add/install local
+bundle** (the Desktop `desktop` profile is managed by the app). CLI equivalent for a non-Electron
+profile:
+
+```bash
+dsh plugin --profile desktop add <path-to-this-clone>
+```
+
+## Capability category
+
+**开发与运维 / Developer Tools** — Android VM lifecycle, APK install/preview, rooted debugging
+and Agent-facing UI automation for development workflows.
+
+## Risks, permissions and compatibility
+
+**Requirements**
+
+- Android SDK with `adb`, emulator, `sdkmanager`/`avdmanager`, a matching system image and an AVD
+  (the Environment card checks all of this; SDK bootstrap is opt-in).
+- Hardware virtualization: AEHD/WHPX on Windows, KVM on Linux, or HVF on macOS.
+- Node.js ≥ 20 only for the repository's headless checks; the plugin itself has no npm
+  dependencies or build step.
+- Each running VM costs roughly 2.5 GB RAM; `maxInstances` defaults to 3 extra VMs.
+
+**Permissions / risk**
+
+- The guest is intentionally `userdebug` and rooted (`adb root` on boot); do not put secrets or
+  personal data in the AVD.
+- `apk_vm` is registered for every Agent in the profile and exposes guest root shell, app
+  install/uninstall, UIAutomator and input injection. Grant it the same trust as a terminal on a
+  rooted Android device.
+- `/apk-vm/*` HTTP routes and WebSocket upgrades are same-origin and **loopback-only by
+  default**; `allowRemote: true` is an explicit opt-in for use behind a trusted authenticated
+  proxy.
+- No telemetry. Network access only occurs for explicit SDK/system-image downloads through the
+  user's `sdkmanager`, or when the user configures a remote adb device.
+
+**Compatibility**
+
+- Tested with DSH Desktop `0.2.1-rc.3` (static bundle/plugin APIs).
+- Windows x64 is the only platform verified end-to-end (boot, H.264, rooted debug, Agent tool).
+  macOS/Linux have headless setup/CI coverage but not a live emulator run in this repository.
+- Optional integration with
+  [`dsh-better-sidebar`](https://github.com/omdsh-dev/DSH-better-sidebar); the plugin falls back
+  cleanly when that service is absent.
+- AOSP Android 14 / API 34, x86_64 system image; physical/remote adb devices can be attached
+  instead of the AVD.
+
 ---
 
-## Demo
+## Demo / visible proof
 
-Media assets are not recorded yet; this README does not fabricate screenshots or numbers.
+Real screenshots from the reference host (cropped to remove the DSH sidebar, conversation names
+and local paths):
+
+![APK VM panel with H.264 stream](docs/screenshot-panel.png)
+
+![Environment card ready](docs/screenshot-setup.png)
+
+![Android guest launcher](docs/screenshot-emulator.png)
 
 | Asset | Status |
 | --- | --- |
-| `docs/demo.gif` | to be recorded — sidebar → environment check → VM boot → APK upload/install → 60 fps interaction |
-| `docs/screenshot-panel.png` | to be captured — main VM console panel |
-| `docs/screenshot-setup.png` | to be captured — Environment self-check card |
-| `docs/screenshot-debug.png` | to be captured — rooted debug card and `apk_vm` tool output |
+| `docs/screenshot-panel.png` | ✅ panel header + guest, H.264 32.8 fps |
+| `docs/screenshot-setup.png` | ✅ Environment card: ready |
+| `docs/screenshot-emulator.png` | ✅ raw guest screenshot |
+| `docs/demo.gif` | optional — record a 20–30 s demo on a real host |
 
-Until they are added, the [Performance](#performance) and [Verification](#verification) sections
-list exactly what was measured, on which host, and how.
+The [Performance](#performance) and [Verification](#verification) sections list exactly what was
+measured, on which host, and how. Real `apk_vm` output from the reference run:
+
+```text
+find_ui {"text":"Phone"}  -> Phone @ 102,1121
+assert_text {"text":"Phone"} -> found 1 matching UI node(s)
+tap_text {"text":"Phone"} -> tapped Phone at 102,1121
+key {"text":"HOME"}       -> returned to launcher
+```
 
 ---
 
@@ -175,13 +251,18 @@ cd dsh-apk-vm
 
 Then pick one:
 
+- **CLI source install (community market / non-`desktop` profile)**:
+  ```bash
+  dsh plugin --profile web add github:yuxiaole-bili/dsh-apk-vm
+  ```
 - **DSH Web UI** — open **Plugins**, choose to add/install a plugin bundle from a local
   directory, and select this folder. The bundle patch is [cordis.patch.yml](cordis.patch.yml);
   the `dsh.client` declaration in [package.json](package.json) loads `client.js` into the Web UI.
 - **Agent tool** — ask a DSH agent to run `plugin_manager` with action `install_bundle` and the
   target set to this folder path.
-- **CLI (non-Electron profiles only)** — `dsh plugin --profile <profile> add <path-to-this-folder>`.
-  The Electron-managed `desktop` profile must be managed from the app UI instead.
+- **CLI local install (non-Electron profiles only)** —
+  `dsh plugin --profile <profile> add <path-to-this-folder>`. The Electron-managed `desktop`
+  profile must be managed from the app UI instead.
 
 After installing or upgrading the plugin, **reload the DSH Web page** so the new client bundle
 is loaded.
