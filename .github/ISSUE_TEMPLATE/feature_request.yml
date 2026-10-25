@@ -1,0 +1,89 @@
+name: Feature request
+description: Suggest a feature or improvement for the APK Virtual Machine plugin
+title: "[Feature]: "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the suggestion. Before filing, check the README **Roadmap** section —
+        physical-device/multi-AVD switching, audio streaming, cloud/remote VM execution and
+        static APK preview are already tracked there.
+
+  - type: checkboxes
+    id: preflight
+    attributes:
+      label: Pre-flight checks
+      options:
+        - label: I searched existing issues and the README Roadmap section.
+          required: true
+        - label: This is not a security vulnerability (those go through private disclosure).
+          required: true
+        - label: This request is about this DSH plugin, not about DeepSeek Harness or the Android emulator itself.
+          required: true
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem does this solve?
+      description: Describe the user need or workflow pain, not just the implementation.
+      placeholder: As an agent/developer, I want ... because ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: What should the plugin do? If it touches existing routes/config, name them.
+      placeholder: e.g. add a panel button that ..., or extend `apk_vm` with action=...
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Workarounds you tried or other designs you considered.
+
+  - type: checkboxes
+    id: area
+    attributes:
+      label: Area(s)
+      description: Which parts of the plugin would this touch?
+      options:
+        - label: VM lifecycle / boot / configuration
+        - label: APK discovery / install / upload
+        - label: Streaming / FPS / input
+        - label: Rooted debug API / `apk_vm` Agent tool
+        - label: dsh-better-sidebar integration
+        - label: UI / theming / localization
+        - label: Docs / packaging / CI
+        - label: Other
+
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Platform relevance
+      options:
+        - All platforms
+        - Windows x64
+        - macOS
+        - Linux
+        - Not platform-specific
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: contribution
+    attributes:
+      label: Contribution
+      options:
+        - label: I am willing to help implement this (see CONTRIBUTING.md).
+        - label: I can help test this on a Windows host with an emulator.
+
+  - type: textarea
+    id: extra
+    attributes:
+      label: Additional context
+      description: Mockups are welcome, but please label them as mockups — not screenshots of real behavior.

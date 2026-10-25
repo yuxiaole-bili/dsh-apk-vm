@@ -1,0 +1,31 @@
+# dependencies
+node_modules/
+.pnpm-store/
+
+# logs / local env
+*.log
+.env
+.env.*
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# ad-hoc emulator/scrcpy captures (fixtures under spike/android/*.apk are kept)
+spike/android/frame.png
+spike/android/*.mp4
+spike/scrcpy/capture.h264
+spike/scrcpy/report.json
+spike/scrcpy/vendor/*.jar
+
+# npm pack output
+*.tgz
+
+# upstream scrcpy sources/tarballs (kept locally for protocol work only)
+spike/scrcpy/src/
+spike/scrcpy/vendor/
+spike/scrcpy/*.tar.gz
+
+dist/

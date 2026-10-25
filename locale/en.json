@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "APK Virtual Machine",
+    "description": "Local AOSP Android VM for DeepSeek Harness: install and preview APKs at up to 60 fps, with rooted adb, UIAutomator automation, and isolated VMs for multiple Agents."
+  }
+}

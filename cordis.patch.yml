@@ -1,0 +1,56 @@
+# Bundle patch: the Host half (index.js) mounts the local Android VM bridge and
+# its same-origin HTTP routes; the `dsh.client` manifest entry in package.json
+# loads ./client.js as the Web UI half that renders the sidebar panel.
+- insert:
+    - id: dsh-apk-vm
+      name: 'dsh-apk-vm'
+      config:
+        # Open-source AOSP Android Emulator. Paths are auto-detected from
+        # ANDROID_HOME / ANDROID_SDK_ROOT / common locations; set sdkRoot or
+        # emulatorPath explicitly only for non-standard installs.
+        # sdkRoot: 'D:/Android/sdk'
+        # emulatorPath: 'D:/Android/sdk/emulator/emulator.exe'
+        systemImage: 'system-images;android-34;default;x86_64'
+        avdName: dsh_apk
+        bootTimeoutMs: 1200000
+        gpuMode: host
+        accel: auto
+        requireAccel: true
+        quickBoot: true
+        snapshotName: default_boot
+        saveSnapshotAfterBoot: true
+        # PNG fallback target frame rate (1-10); the H.264 stream below is 60.
+        frameFps: 2
+        # Warm start after plugin activation (opt-in; consumes CPU while the
+        # plugin is loaded). Auto-start on the first panel open is on by default.
+        prewarm: false
+        prewarmDelayMs: 3000
+        autoStart: true
+        # Multiple isolated VMs: the first Agent gets the default instance;
+        # later Agents get their own AVD/port until maxInstances extra VMs.
+        multiInstance: true
+        maxInstances: 3
+        # Extra instances idle for this long (ms) with no panel frame / stream
+        # client / Agent command are stopped automatically; the AVD is kept for
+        # quick reuse. start()/the next Agent action boots it again.
+        instanceIdleMs: 900000
+        instanceReapIntervalMs: 60000
+        # H.264 stream: up to 60 fps via the vendored scrcpy server; 960 keeps
+        # 540x960 video (plenty for the panel) so software WebCodecs decode can
+        # sustain ~60 fps.
+        scrcpy: true
+        scrcpyMaxSize: 960
+        scrcpyMaxFps: 60
+        scrcpyBitrate: 6000000
+        # System-image downloads (~1 GB) are never automatic; the Environment
+        # card shows the exact missing pieces and the create-avd action works
+        # once the image is present.
+        allowSetupDownloads: false
+        # The VM routes accept root shell/debug actions, so they reject
+        # non-loopback clients by default even if the DSH web UI is exposed to
+        # the LAN. Set true only behind your own authenticated reverse proxy.
+        allowRemote: false
+        # APK discovery roots. The current workspace is always included; add
+        # platform-specific directories here (omit for a portable default).
+        # roots:
+        #   - 'D:/projects'

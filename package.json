@@ -1,0 +1,76 @@
+{
+  "name": "dsh-apk-vm",
+  "version": "0.3.13",
+  "private": true,
+  "type": "module",
+  "description": "Local AOSP Android VM for DeepSeek Harness: preview rooted APKs at up to 60 fps, automate UIAutomator flows, and give each Agent an isolated VM.",
+  "license": "Apache-2.0",
+  "author": {
+    "name": "yuxiaole-bili",
+    "url": "https://github.com/yuxiaole-bili/"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/yuxiaole-bili/dsh-apk-vm.git"
+  },
+  "homepage": "https://github.com/yuxiaole-bili/dsh-apk-vm#readme",
+  "bugs": {
+    "url": "https://github.com/yuxiaole-bili/dsh-apk-vm/issues"
+  },
+  "keywords": ["dsh", "dsh-plugin", "deepseek-harness", "android", "android-emulator", "apk", "scrcpy", "webcodecs", "agent", "ui-automation", "rooted-android"],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "check": "node --check index.js && node --check client.js && node --check lib/android.js && node --check lib/scrcpy.js && node --check lib/ws.js && node --check lib/setup.js && node --check lib/instances.js && node --check lib/video-stream.js",
+    "privacy": "node scripts/privacy-scan.mjs",
+    "test": "node spike/ui-smoke.cjs && node spike/ui-better-sidebar-smoke.cjs && node spike/setup-smoke.mjs && node spike/android/mock-device.mjs && node spike/android/launch-plan.mjs && node spike/instances-smoke.mjs"
+  },
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./setup": "./lib/setup.js",
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.svg"
+  },
+  "files": [
+    "index.js",
+    "client.js",
+    "cordis.patch.yml",
+    "lib/android.js",
+    "lib/scrcpy.js",
+    "lib/ws.js",
+    "lib/setup.js",
+    "lib/instances.js",
+    "lib/video-stream.js",
+    "lib/vendor/scrcpy-server-v5.0.1.jar",
+    "LICENSE",
+    "NOTICE",
+    "CODE_OF_CONDUCT.md",
+    "CONTRIBUTING.md",
+    "SECURITY.md",
+    "docs/README.md",
+    "docs/RELEASING.md",
+    "docs/PRIVACY.md",
+    "scripts/privacy-scan.mjs",
+    "locale/*.json",
+    "icon.svg",
+    "README.md",
+    "DESIGN.md",
+    "DEMO.md",
+    "CHANGELOG.md"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true,
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-slots",
+        "@deepseek-ai/dsh-client-locale"
+      ]
+    }
+  }
+}

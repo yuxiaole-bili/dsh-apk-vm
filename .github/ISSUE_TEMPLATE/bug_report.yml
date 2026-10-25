@@ -1,0 +1,121 @@
+name: Bug report
+description: Report a defect or crash in the APK Virtual Machine plugin
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report a bug.
+
+        **Do not report security vulnerabilities here.** See the repository's `SECURITY.md`
+        for private responsible disclosure.
+
+        Before filing, check the README troubleshooting section (acceleration, port conflicts,
+        snapshot mismatch, DSH auth/session refresh) and search existing issues.
+
+  - type: checkboxes
+    id: preflight
+    attributes:
+      label: Pre-flight checks
+      options:
+        - label: I searched existing issues and the README troubleshooting section.
+          required: true
+        - label: This is not a security vulnerability (those go through private disclosure).
+          required: true
+        - label: I am reporting observations I actually made (no fabricated numbers or screenshots).
+          required: true
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: A clear description of the bug, including the exact error message if any.
+      placeholder: The panel shows "No usable CPU hypervisor (AEHD/WHPX) was found" although ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: Include the route/UI action and the APK if relevant.
+      placeholder: |
+        1. Install the plugin bundle ...
+        2. Open the APK Virtual Machine sidebar entry
+        3. Press Start ...
+        4. See error ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected-actual
+    attributes:
+      label: Expected vs. actual behavior
+      placeholder: |
+        Expected: ...
+        Actual: ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Fill in what you know; remove usernames and personal paths if you prefer.
+      value: |
+        - Host OS / version:
+        - DSH version / profile:
+        - Plugin version (package.json):
+        - Node.js version (if running repo checks):
+        - Android SDK: ANDROID_HOME, emulator version (`emulator -version`), build-tools version:
+        - System image / AVD: (e.g. system-images;android-34;default;x86_64, avdName)
+        - Virtualization backend: AEHD / WHPX / KVM / HVF / none (`emulator -accel-check`)
+        - GPU mode: host / swiftshader_indirect
+        - VM state from `/apk-vm/state`: state, bootKind, bootMs, accel, error
+    validations:
+      required: true
+
+  - type: textarea
+    id: config
+    attributes:
+      label: Plugin configuration
+      description: The `config:` block of the plugin row. Redact private roots/paths.
+      render: yaml
+      placeholder: |
+        config:
+          emulatorPath: '...'
+          avdName: dsh_apk
+          quickBoot: true
+          scrcpy: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs
+      description: Panel log tail, DSH host log, adb/emulator output. Remove auth tokens, personal paths and secrets.
+      render: shell
+      placeholder: |
+        [vm] CPU acceleration: hardware ...
+        adb: ...
+    validations:
+      required: false
+
+  - type: textarea
+    id: extra
+    attributes:
+      label: Additional context / screenshots
+      description: Anything else that helps. Screenshots must be real captures, not mockups.
+
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Host platform
+      description: Windows x64 is the only end-to-end verified platform; macOS/Linux SDK discovery is implemented but unverified.
+      options:
+        - Windows x64 (verified platform)
+        - macOS
+        - Linux
+        - Other / unsure
+    validations:
+      required: true

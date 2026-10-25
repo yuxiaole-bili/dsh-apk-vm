@@ -1,0 +1,127 @@
+name: CI
+
+# Hosted CI runs only headless checks: syntax checks plus the sandbox/mock test suites.
+# Emulator integration tests (real boot, snapshot save/restore, H.264 stream, rooted debug)
+# are Windows-local only and intentionally not part of this workflow — GitHub-hosted runners
+# do not provide nested virtualization. See CONTRIBUTING.md for the local procedure.
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  headless:
+    name: Headless checks (Node 24)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js 24
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - name: Show toolchain
+        run: |
+          set -euo pipefail
+          node --version
+          npm --version || true
+          echo "ANDROID_HOME=${ANDROID_HOME:-}"
+          echo "ANDROID_SDK_ROOT=${ANDROID_SDK_ROOT:-}"
+
+      - name: Syntax check (Host, Client, lib modules)
+        run: |
+          set -euo pipefail
+          node --check index.js
+          node --check client.js
+          for f in lib/*.js; do node --check "$f"; done
+
+      - name: Privacy scan (tracked tree only)
+        run: node scripts/privacy-scan.mjs
+
+      - name: Check Android build-tools (aapt2) for the mock-device test
+        run: |
+          set -euo pipefail
+          SDK="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}}"
+          echo "Android SDK: $SDK"
+          if ls "$SDK"/build-tools/*/aapt2 >/dev/null 2>&1; then
+            ls "$SDK"/build-tools/*/aapt2 | tail -n 1
+            exit 0
+          fi
+          echo "::error::aapt2 not found under $SDK/build-tools."
+          echo "::error::spike/android/mock-device.mjs parses a real APK with aapt2; install Android SDK build-tools."
+          exit 1
+
+      - name: UI smoke test (client bundle sandbox)
+        run: node spike/ui-smoke.cjs
+
+      - name: dsh-better-sidebar compatibility smoke test
+        run: node spike/ui-better-sidebar-smoke.cjs
+
+      - name: Environment detection / setup actions smoke test (hermetic)
+        run: node spike/setup-smoke.mjs
+
+      - name: Android device critical path (mock adb + real aapt2)
+        run: node spike/android/mock-device.mjs
+
+      - name: Fast-boot launch plan assertions
+        run: node spike/android/launch-plan.mjs
+
+      - name: Multi-instance lifecycle assertions (hermetic)
+        run: node spike/instances-smoke.mjs
+
+      # Note: without a hypervisor the launch-plan suite still passes — it asserts the
+      # fail-fast plan (empty argv + fatal message) rather than booting an emulator.
+      - name: Emulator integration tests note
+        run: |
+          echo "Emulator integration tests are Windows-local only (boot, snapshot, H.264, rooted debug)."
+          echo "See CONTRIBUTING.md#emulator-integration-tests-are-windows-local-only."
+
+  cross-platform:
+    name: Cross-platform headless (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js 24
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - name: Syntax check
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --check index.js
+          node --check client.js
+          for f in lib/*.js; do node --check "$f"; done
+
+      - name: Hermetic setup detection (all platforms)
+        shell: bash
+        run: node spike/setup-smoke.mjs
+
+      - name: Multi-instance lifecycle (all platforms)
+        shell: bash
+        run: node spike/instances-smoke.mjs
+
+      - name: UI bundle smoke (all platforms)
+        shell: bash
+        run: node spike/ui-smoke.cjs

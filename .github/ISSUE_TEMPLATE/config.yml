@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security vulnerability
+    url: https://github.com/yuxiaole-bili/dsh-apk-vm/security/advisories/new
+    about: Please report security issues privately, not as a public issue.
+  - name: Project repository
+    url: https://github.com/yuxiaole-bili/dsh-apk-vm
+    about: Source, releases and documentation.

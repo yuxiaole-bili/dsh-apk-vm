@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "APK 虚拟机",
+    "description": "DeepSeek Harness 的本地 AOSP Android 虚拟机：安装并预览 APK（最高 60 fps），提供 root adb、UIAutomator 自动化和多 Agent 隔离实例。"
+  }
+}
