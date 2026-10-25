@@ -25,6 +25,8 @@ npm 包安装（插件中心/社区市场推荐命令）：
 dsh plugin --profile web add dsh-apk-vm
 ```
 
+npm 包：<https://www.npmjs.com/package/dsh-apk-vm>
+
 源码 fallback：
 
 ```bash
