@@ -23,9 +23,10 @@ same-origin, loopback-only debug HTTP API and an `apk_vm` Agent tool.
 
 **Status:** `0.3.13` · Apache-2.0 · no npm runtime dependencies · no build step.
 
-This is an open-source DSH plugin published from this repository as the npm package
-**`dsh-apk-vm`**, with a GitHub source fallback.
-Repository: [github.com/yuxiaole-bili/dsh-apk-vm](https://github.com/yuxiaole-bili/dsh-apk-vm).
+This is an open-source DSH plugin. The package is prepared for npm as **`dsh-apk-vm`**; the
+install command below uses that package name. If npm does not have the package yet, use the
+source fallback below. Repository:
+[github.com/yuxiaole-bili/dsh-apk-vm](https://github.com/yuxiaole-bili/dsh-apk-vm).
 Maintainer: [yuxiaole-bili](https://github.com/yuxiaole-bili/).
 Please read [CONTRIBUTING.md](CONTRIBUTING.md), [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md),
 [SECURITY.md](SECURITY.md), [docs/PRIVACY.md](docs/PRIVACY.md) and [docs/RELEASING.md](docs/RELEASING.md) before opening issues or
@@ -40,7 +41,7 @@ the session.
 ## Install
 
 Install the published npm package (the command used by the DSH plugin center and the community
-market):
+market). If the package is not yet visible in your registry, use the source fallback below.
 
 ```bash
 dsh plugin --profile web add dsh-apk-vm
