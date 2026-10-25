@@ -13,6 +13,7 @@ Open-source package identity.
 - Removed `private: true` and added `publishConfig` for the public npm package
   **`dsh-apk-vm`**; the primary install command is now
   `dsh plugin --profile web add dsh-apk-vm` (source/GitHub install remains a fallback).
+  Published: <https://www.npmjs.com/package/dsh-apk-vm> (`0.3.13`).
 - Wrote the package/plugin descriptions (English + Chinese `meta.description`), expanded
   keywords, and added a suggested GitHub repository description/topics list to
   `docs/RELEASING.md`.
