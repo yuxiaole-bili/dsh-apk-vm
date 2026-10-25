@@ -374,13 +374,15 @@ async function main() {
     const vm = new AndroidVm();
     const mock = attachMock(vm);
     const metadata = await vm.installApk(SAMPLE_APK);
-    assert.deepEqual(metadata, {
+    const { sdkVersion, ...rest } = metadata;
+    // aapt2 versions differ on whether they emit sdkVersion for this fixture; targetSdk is stable.
+    assert.ok(sdkVersion === null || sdkVersion === 21, `unexpected sdkVersion: ${sdkVersion}`);
+    assert.deepEqual(rest, {
       packageName: 'com.example.dshspike',
       label: 'DSH Spike App',
       launchActivity: 'com.example.dshspike.MainActivity',
       versionName: null,
       versionCode: null,
-      sdkVersion: 21,
       targetSdkVersion: 34,
       permissions: [],
       features: ['android.hardware.faketouch'],
