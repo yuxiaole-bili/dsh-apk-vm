@@ -43,9 +43,8 @@ Apache-2.0
 
 ### 截图 / 演示
 
-- 面板 + H.264 预览：<https://github.com/yuxiaole-bili/dsh-apk-vm/blob/main/docs/screenshot-panel.png>
-- Environment 自检：<https://github.com/yuxiaole-bili/dsh-apk-vm/blob/main/docs/screenshot-setup.png>
-- Android guest：<https://github.com/yuxiaole-bili/dsh-apk-vm/blob/main/docs/screenshot-emulator.png>
+- 主面板 + H.264 预览：<https://github.com/yuxiaole-bili/dsh-apk-vm/blob/main/docs/screenshot-panel.png>
+- 右侧栏布局：<https://github.com/yuxiaole-bili/dsh-apk-vm/blob/main/docs/screenshot-sidebar.png>
 - 真实 `apk_vm` 输出见 README 的 Demo/Verification 章节。
 
 ### 补充说明

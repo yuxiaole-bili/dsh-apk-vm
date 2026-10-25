@@ -96,20 +96,16 @@ and Agent-facing UI automation for development workflows.
 
 ## Demo / visible proof
 
-Real screenshots from the reference host (cropped to remove the DSH sidebar, conversation names
-and local paths):
+Real screenshots from the reference host:
 
-![APK VM panel with H.264 stream](docs/screenshot-panel.png)
+![APK VM main panel](docs/screenshot-panel.png)
 
-![Environment card ready](docs/screenshot-setup.png)
-
-![Android guest launcher](docs/screenshot-emulator.png)
+![APK VM in the right sidebar](docs/screenshot-sidebar.png)
 
 | Asset | Status |
 | --- | --- |
-| `docs/screenshot-panel.png` | ✅ panel header + guest, H.264 32.8 fps |
-| `docs/screenshot-setup.png` | ✅ Environment card: ready |
-| `docs/screenshot-emulator.png` | ✅ raw guest screenshot |
+| `docs/screenshot-panel.png` | ✅ main panel: Environment, guest H.264, controls |
+| `docs/screenshot-sidebar.png` | ✅ right-sidebar layout next to a session |
 | `docs/demo.gif` | optional — record a 20–30 s demo on a real host |
 
 The [Performance](#performance) and [Verification](#verification) sections list exactly what was

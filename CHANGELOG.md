@@ -19,8 +19,9 @@ Open-source package identity.
   badges/repository link, issue-template security/repository links, and the local `origin`
   remote.
 - Added the community-market submission package: one-line value, copyable source install
-  command, capability category, risk/permissions/compatibility section, real cropped
-  screenshots, and `docs/SUBMISSION.md` with the filled `dsh-plugin.org` issue template.
+  command, capability category, risk/permissions/compatibility section, real screenshots
+  (main panel + right sidebar), and `docs/SUBMISSION.md` with the filled `dsh-plugin.org` issue
+  template.
 
 ## 0.3.12
 
