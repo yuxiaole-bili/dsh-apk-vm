@@ -10,7 +10,9 @@ Open-source package identity.
   naming convention (`dsh-*`). The Host export, client bundle id, Cordis patch row, smoke tests
   and docs were updated to match.
 - `author` is now `yuxiaole-bili <https://github.com/yuxiaole-bili/>`.
-- Remains `private: true` (distributed via GitHub/DSH bundle, not npm).
+- Removed `private: true` and added `publishConfig` for the public npm package
+  **`dsh-apk-vm`**; the primary install command is now
+  `dsh plugin --profile web add dsh-apk-vm` (source/GitHub install remains a fallback).
 - Wrote the package/plugin descriptions (English + Chinese `meta.description`), expanded
   keywords, and added a suggested GitHub repository description/topics list to
   `docs/RELEASING.md`.

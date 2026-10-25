@@ -23,7 +23,8 @@ same-origin, loopback-only debug HTTP API and an `apk_vm` Agent tool.
 
 **Status:** `0.3.13` · Apache-2.0 · no npm runtime dependencies · no build step.
 
-This is an open-source DSH plugin distributed as a repository/bundle, not published to npm.
+This is an open-source DSH plugin published from this repository as the npm package
+**`dsh-apk-vm`**, with a GitHub source fallback.
 Repository: [github.com/yuxiaole-bili/dsh-apk-vm](https://github.com/yuxiaole-bili/dsh-apk-vm).
 Maintainer: [yuxiaole-bili](https://github.com/yuxiaole-bili/).
 Please read [CONTRIBUTING.md](CONTRIBUTING.md), [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md),
@@ -36,19 +37,23 @@ Turn DeepSeek Harness into a local Android APK workbench: boot a rooted AOSP VM,
 up to 60 fps in the sidebar, and let Agents install, tap, inspect and debug APKs without leaving
 the session.
 
-## Install (source)
+## Install
 
-This repository has no npm package yet, so the community-market source command is:
+Install the published npm package (the command used by the DSH plugin center and the community
+market):
+
+```bash
+dsh plugin --profile web add dsh-apk-vm
+```
+
+For the Electron-managed Desktop profile, use **Plugins → add/install local bundle** with this
+directory, or install the package through the app's plugin manager.
+
+Source fallback without npm:
 
 ```bash
 dsh plugin --profile web add github:yuxiaole-bili/dsh-apk-vm
-```
-
-For the DSH Desktop profile, install the same directory from **Plugins → add/install local
-bundle** (the Desktop `desktop` profile is managed by the app). CLI equivalent for a non-Electron
-profile:
-
-```bash
+# local clone / non-Electron profile:
 dsh plugin --profile desktop add <path-to-this-clone>
 ```
 
@@ -247,10 +252,11 @@ cd dsh-apk-vm
 
 Then pick one:
 
-- **CLI source install (community market / non-`desktop` profile)**:
+- **CLI npm install (community market / non-`desktop` profile)**:
   ```bash
-  dsh plugin --profile web add github:yuxiaole-bili/dsh-apk-vm
+  dsh plugin --profile web add dsh-apk-vm
   ```
+  Source fallback: `dsh plugin --profile web add github:yuxiaole-bili/dsh-apk-vm`.
 - **DSH Web UI** — open **Plugins**, choose to add/install a plugin bundle from a local
   directory, and select this folder. The bundle patch is [cordis.patch.yml](cordis.patch.yml);
   the `dsh.client` declaration in [package.json](package.json) loads `client.js` into the Web UI.

@@ -1,7 +1,6 @@
 {
   "name": "dsh-apk-vm",
   "version": "0.3.13",
-  "private": true,
   "type": "module",
   "description": "Local AOSP Android VM for DeepSeek Harness: preview rooted APKs at up to 60 fps, automate UIAutomator flows, and give each Agent an isolated VM.",
   "license": "Apache-2.0",
@@ -20,6 +19,10 @@
   "keywords": ["dsh", "dsh-plugin", "deepseek-harness", "android", "android-emulator", "apk", "scrcpy", "webcodecs", "agent", "ui-automation", "rooted-android"],
   "engines": {
     "node": ">=20"
+  },
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
   },
   "scripts": {
     "check": "node --check index.js && node --check client.js && node --check lib/android.js && node --check lib/scrcpy.js && node --check lib/ws.js && node --check lib/setup.js && node --check lib/instances.js && node --check lib/video-stream.js",

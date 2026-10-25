@@ -19,7 +19,13 @@ DSH plugin hub issue template.
 
 ### 安装命令
 
-无 npm 包，源码安装：
+npm 包安装（插件中心/社区市场推荐命令）：
+
+```bash
+dsh plugin --profile web add dsh-apk-vm
+```
+
+源码 fallback：
 
 ```bash
 dsh plugin --profile web add github:yuxiaole-bili/dsh-apk-vm

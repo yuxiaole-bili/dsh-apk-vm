@@ -1,9 +1,26 @@
 # Releasing and publishing
 
-This project is distributed as a **DSH plugin bundle** (a local directory / GitHub repo).
-The package name follows the DSH plugin naming convention: `dsh-apk-vm`. It is currently
-`private: true` and not published to npm; the bundle patch installs from a directory path.
+This project is distributed as a **DSH plugin bundle** and an **npm package** named
+`dsh-apk-vm`, following the DSH plugin naming convention. The primary install command is
+`dsh plugin --profile web add dsh-apk-vm`; the bundle patch installs from the npm package.
 Repository: <https://github.com/yuxiaole-bili/dsh-apk-vm>.
+
+## Publish to npm
+
+The package is intentionally public and has no build step; publishing the repository directory is
+enough:
+
+```bash
+npm login                      # once per machine, as the npm account that owns dsh-apk-vm
+npm publish --access public    # prepublish uses the packed file list
+npm view dsh-apk-vm version    # verify the published version
+```
+
+The GitHub release tarball and the npm tarball are produced from the same `npm pack` output.
+If the version already exists on npm, bump `version` and `CHANGELOG.md` together before publishing.
+For a manual GitHub Actions path, add an `NPM_TOKEN` repository secret (npm automation token that
+can publish `dsh-apk-vm`) and run the **Publish to npm** workflow
+([.github/workflows/npm-publish.yml](../.github/workflows/npm-publish.yml)).
 
 ## Suggested GitHub repository description
 
