@@ -4,6 +4,7 @@
 [![npm](https://img.shields.io/npm/v/dsh-apk-vm.svg)](https://www.npmjs.com/package/dsh-apk-vm)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 [![GitHub](https://img.shields.io/badge/github-yuxiaole--bili%2Fdsh--apk--vm-181717)](https://github.com/yuxiaole-bili/dsh-apk-vm)
+[![Listed on dsh-plugin.org](https://dsh-plugin.org/badges/listed.svg)](https://dsh-plugin.org/plugins/yuxiaole-bili/dsh-apk-vm)
 
 **Run a real Android APK inside a local, rooted, open-source Android VM and preview it in the DeepSeek Harness sidebar — streamed as H.264/WebCodecs video at up to 60 fps.**
 
