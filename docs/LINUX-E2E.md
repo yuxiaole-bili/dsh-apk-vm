@@ -18,10 +18,10 @@ CI-only check.
 | System image | `system-images;android-34;default;x86_64` |
 | AVD | `dsh_linux_test` (1080×2340, pixel_5) |
 
-The regular `OPENCODE` account is **not in the `kvm` group** and has no passwordless sudo;
-`/dev/kvm` is denied for it. The emulator portion was therefore run as the provided
-`OPENCODE_100` account (same SSH key), which is in the `kvm` group. The plugin itself never
-requires sudo or system-wide changes.
+The regular login account is **not in the `kvm` group** and has no passwordless sudo;
+`/dev/kvm` is denied for it. The emulator portion was therefore run as a second account on
+the same host (authenticated with the same SSH key), which is in the `kvm` group. The plugin
+itself never requires sudo or system-wide changes.
 
 ## Emulator launch
 
@@ -66,7 +66,7 @@ The final tree should be re-run in CI for the release tag.
   screenshots; the screenshots still succeed.
 - The emulator prints a metrics-collection warning; the launch args now include
   `-no-metrics`.
-- `OPENCODE` without `kvm` group membership gets the documented "No usable CPU hypervisor"
+- An account without `kvm` group membership gets the documented "No usable CPU hypervisor"
   error instead of a hung boot. Add the user to `kvm` (or use an account that has it) for
   hardware acceleration.
 - The platform still requires an Android SDK and AVD; only the SDK install and test harness

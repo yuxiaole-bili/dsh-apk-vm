@@ -21,9 +21,10 @@ same-origin, loopback-only debug HTTP API and an `apk_vm` Agent tool.
 > 点击、滑动、按键、文本输入送回虚拟机。支持拖拽 APK 上传、环境自检卡片、root 调试
 > API 与 `apk_vm` Agent 工具；多个 Agent 可各自使用独立的隔离虚拟机实例（多开）。
 > 参考机上冷启动约 29.5 s、快照快速启动约 8.4–10.5 s。
-> 当前 **Windows x64 为端到端已验证平台**；SDK/模拟器探测已覆盖 Windows / macOS / Linux。
+> 当前 **Windows x64 与 Linux x86_64（headless）为端到端已验证平台**；macOS 仅做探测/CI
+> 覆盖，详见 `docs/LINUX-E2E.md`。
 
-**Status:** `0.4.0` · Apache-2.0 · no npm runtime dependencies · no build step.
+**Status:** `0.4.1` · Apache-2.0 · no npm runtime dependencies · no build step.
 
 This is an open-source DSH plugin published on npm as **`dsh-apk-vm`**. Repository:
 [github.com/yuxiaole-bili/dsh-apk-vm](https://github.com/yuxiaole-bili/dsh-apk-vm).

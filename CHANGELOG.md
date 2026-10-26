@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.4.1
+
+Privacy cleanup for the published proof assets.
+
+### Changed
+
+- Cropped `docs/screenshot-sidebar.png` to the plugin panel only (removes the center session
+  area and workspace label; the APK paths were already redacted).
+- Removed host account names from `docs/LINUX-E2E.md`; the document now describes the KVM
+  group requirement without identifying accounts.
+
 ## 0.4.0
 
 Substantive feature release: inspection, replay, package bundles, network debugging,
