@@ -130,18 +130,21 @@ async function main() {
     const sampleStat = await fsp.stat(SAMPLE_APK).catch(() => null);
     assert.ok(sampleStat && sampleStat.isFile(), `sample APK missing at ${SAMPLE_APK}`);
     const metadata = await new AndroidVm().inspectApk(SAMPLE_APK);
-    assert.deepEqual(metadata, {
-      packageName: 'com.example.dshspike',
-      label: 'DSH Spike App',
-      launchActivity: 'com.example.dshspike.MainActivity',
-    });
+    assert.equal(metadata.packageName, 'com.example.dshspike');
+    assert.equal(metadata.label, 'DSH Spike App');
+    assert.equal(metadata.launchActivity, 'com.example.dshspike.MainActivity');
+    assert.equal(metadata.targetSdkVersion, 34);
+    assert.ok(metadata.sdkVersion === null || metadata.sdkVersion === 21);
+    assert.ok(Array.isArray(metadata.permissions));
+    assert.ok(Array.isArray(metadata.features));
+    assert.ok(Array.isArray(metadata.nativeCode));
   });
 
   // --- APK validation errors ------------------------------------------------
   await check('inspectApk rejects a missing file with a clear message', async () => {
     await assert.rejects(
       () => new AndroidVm().inspectApk(path.join(SPIKE_DIR, 'does-not-exist.apk')),
-      /APK not found/,
+      /package not found/,
     );
   });
 

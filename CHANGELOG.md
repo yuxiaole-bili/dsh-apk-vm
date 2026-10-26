@@ -1,5 +1,42 @@
 # Changelog
 
+## 0.4.0
+
+Substantive feature release: inspection, replay, package bundles, network debugging,
+reproducible demo, and real Linux support.
+
+### Added
+
+- **UI Inspector + selector generation.** `GET /apk-vm/debug/inspect` returns parsed
+  UIAutomator nodes with bounds, labels and copy-ready `find_ui` / `assert_text` / `tap_text`
+  commands; the panel renders a clickable overlay and the `apk_vm` tool gains `inspect_ui`.
+- **Interaction recorder / replay.** `GET|POST /apk-vm/flows` lists, starts, stops, replays
+  and deletes JSON flows of tap/swipe/key/text input; the panel has a Flow recorder card and
+  Agents get `flow_start`, `flow_stop`, `flow_list`, `flow_replay`.
+- **APKS / XAPK / split APK installation.** Upload and install `adb install-multiple` bundles;
+  `.aab` is rejected with a bundletool hint. The APK list tags bundle files.
+- **Network debugging.** Set/clear the guest global HTTP proxy and install a local PEM/DER CA
+  with the correct OpenSSL subject hash via `/apk-vm/debug/proxy` and `/apk-vm/debug/ca`
+  (plus Agent tool actions `proxy` and `install_ca`).
+- **Reproducible public demo.** `examples/` contains a committed MIT-licensed 12 KB sample
+  APK, a deterministic SDK-only build script, and `demo.mjs`, which installs it, taps the
+  button, asserts `Hello from dsh-apk-vm`, and saves a screenshot.
+- **Real Linux support.** Headless x86_64 validation on Ubuntu 22.04 with KVM and
+  SwiftShader: boot, adb root, APK install, UIAutomator input, H.264/scrcpy, proxy, CA and
+  screenshots; documented in `docs/LINUX-E2E.md`.
+
+### Fixed
+
+- **Dangerous auto-attach stop behavior.** `AndroidVm.stop()` no longer sends
+  `adb emu kill`/`adb disconnect` to a pre-existing device that this process did not spawn;
+  it leaves such devices running and reports `stopped`. A regression test covers it.
+- Headless Linux launches now request `-no-metrics` and fall back from host GPU to
+  `swiftshader_indirect` when no display is present.
+- `uiDump()` now includes UIAutomator stderr in its error instead of a generic
+  "empty hierarchy".
+- `spike/android/smoke.mjs` updated for the richer APK metadata and the current
+  package-not-found message.
+
 ## 0.3.13
 
 Open-source package identity.

@@ -23,7 +23,7 @@ same-origin, loopback-only debug HTTP API and an `apk_vm` Agent tool.
 > 参考机上冷启动约 29.5 s、快照快速启动约 8.4–10.5 s。
 > 当前 **Windows x64 为端到端已验证平台**；SDK/模拟器探测已覆盖 Windows / macOS / Linux。
 
-**Status:** `0.3.13` · Apache-2.0 · no npm runtime dependencies · no build step.
+**Status:** `0.4.0` · Apache-2.0 · no npm runtime dependencies · no build step.
 
 This is an open-source DSH plugin published on npm as **`dsh-apk-vm`**. Repository:
 [github.com/yuxiaole-bili/dsh-apk-vm](https://github.com/yuxiaole-bili/dsh-apk-vm).
@@ -90,8 +90,10 @@ and Agent-facing UI automation for development workflows.
 **Compatibility**
 
 - Tested with DSH Desktop `0.2.1-rc.3` (static bundle/plugin APIs).
-- Windows x64 is the only platform verified end-to-end (boot, H.264, rooted debug, Agent tool).
-  macOS/Linux have headless setup/CI coverage but not a live emulator run in this repository.
+- Windows x64 and Linux x86_64 (headless, KVM + SwiftShader) are verified end-to-end
+  (boot, H.264, rooted debug, APK install, Agent tool). macOS has SDK discovery + headless CI
+  coverage but no live emulator run in this repository.
+  See [docs/LINUX-E2E.md](docs/LINUX-E2E.md).
 - Optional integration with
   [`dsh-better-sidebar`](https://github.com/omdsh-dev/DSH-better-sidebar); the plugin falls back
   cleanly when that service is absent.
@@ -155,6 +157,22 @@ key {"text":"HOME"}       -> returned to launcher
   (raw APK bytes, ≤ 500 MiB, `.apk`/ZIP magic checked), installed into the running VM and
   launched. Uploaded files live in the OS temp dir and are cleaned up when the plugin is
   disposed. Installing by absolute local path is still available (`/apk-vm/install`).
+- **APK bundles: APKS / XAPK / split APKs.** The Upload APK flow accepts `.apk`, `.apks`
+  (bundletool output) and `.xapk` files; split APKs are extracted to a temp directory and
+  installed with `adb install-multiple`. Plain `.apk` still uses `adb install -r`.
+  `.aab` is rejected with a clear "build APKs with bundletool first" message.
+- **UI Inspector + selector generation.** Toggle **Inspect UI** in the panel to overlay
+  clickable UIAutomator nodes on the live screen. Selecting a node shows its text, resource id,
+  class and bounds and gives copy-ready `tap_text` / `assert_text` commands for the `apk_vm`
+  tool. Also available to Agents as the `inspect_ui` action.
+- **Interaction recorder / replay.** Start a recording, use the panel or Agent tool normally,
+  then save the tap / swipe / key / text sequence as a JSON flow under the OS temp directory.
+  Flows can be listed, replayed with their original relative timing, downloaded or deleted.
+  Agents get `flow_start`, `flow_stop`, `flow_list` and `flow_replay`.
+- **Network debugging: proxy + CA.** The Network card sets/clears the guest global HTTP proxy
+  (`settings put global http_proxy`) and installs a local `.pem`/`.crt` CA into the rooted
+  Android user CA store with the correct OpenSSL subject-hash filename; the system CA store is
+  updated when the guest allows a remount.
 - **Installed-app management.** The panel's **Installed apps** card lists third-party packages
   for the active instance and offers force-stop, clear-data and uninstall; it uses the same
   rooted `debug/packages` + `debug/action` API as the Agent tool.
@@ -194,8 +212,8 @@ key {"text":"HOME"}       -> returned to launcher
   8.4–10.5 s** on the reference host ([details](#fast-start-four-layers)).
 - **Cross-platform SDK discovery.** `lib/setup.js` and `lib/android.js` discover Android SDK,
   `adb`, the emulator and AVDs across Windows, macOS and Linux layouts (including `.exe`
-  suffixes and per-OS fallback locations). Windows x64 is the only platform verified end-to-end
-  so far.
+  suffixes and per-OS fallback locations). Windows x64 and **Linux x86_64 headless** are
+  verified end-to-end; see [docs/LINUX-E2E.md](docs/LINUX-E2E.md).
 - **Same-origin only.** Every `/apk-vm/*` HTTP route and the `/apk-vm/ws` upgrade rejects
   cross-origin requests; request bodies and command output are bounded, and host processes are
   spawned with argv arrays (never a shell string).
@@ -203,6 +221,33 @@ key {"text":"HOME"}       -> returned to launcher
   are bundled in [locale/](locale).
 - **Dependency-free backend.** The Host half uses Node built-ins only: no npm dependencies,
   no build step.
+
+---
+
+## UI Inspector and flow recorder
+
+- `GET /apk-vm/debug/inspect` (and `/apk-vm/instances/<id>/debug/inspect`) returns the parsed
+  UIAutomator nodes with bounds, labels, and generated `find_ui` / `assert_text` / `tap_text`
+  commands. The panel's **Inspect UI** button renders the same data as an overlay.
+- `GET|POST /apk-vm/flows` (and `/apk-vm/instances/<id>/flows`) lists, starts, stops, replays
+  and deletes recorded flows. The panel has a **Flow recorder** card with the same actions.
+- `apk_vm` actions: `inspect_ui`, `flow_start`, `flow_stop`, `flow_list`, `flow_replay`.
+- `POST /apk-vm/debug/proxy` sets the guest HTTP proxy; `DELETE` clears it.
+- `POST /apk-vm/debug/ca` accepts a host `.pem`/`.crt` path and installs it under the guest's
+  user CA directory with the correct subject hash.
+
+## Reproducible demo
+
+A public, dependency-free demo lives in [examples](examples/README.md):
+
+```bash
+node examples/demo.mjs
+```
+
+It installs the committed MIT-licensed 12 KB sample APK (`dev.dsh.sample`), reads the
+UIAutomator tree, taps **Say hello**, asserts that the screen now says
+`Hello from dsh-apk-vm`, and saves a 720×1280 screenshot to `examples/demo-out/`. No personal
+APK, private key or host-specific path is required.
 
 ---
 
@@ -804,9 +849,12 @@ before pointing the DSH Web UI at an untrusted network.
 
 - **The plugin manages processes on your machine.** It spawns the Android emulator, `adb`,
   `sdkmanager` and `avdmanager` with `child_process.spawn(exe, argv)` — never through a shell —
-  so user-supplied strings are not shell-interpreted. Paths are validated (APK paths must exist
-  and end in `.apk`; push/pull paths are restricted to `/data/local/tmp`, `/sdcard`,
-  `/storage/emulated/0` and allowed local roots).
+  so user-supplied strings are not shell-interpreted. Paths are validated (APK/bundle paths must
+  exist and end in `.apk`/`.apks`/`.xapk`; push/pull paths are restricted to `/data/local/tmp`,
+  `/sdcard`, `/storage/emulated/0` and allowed local roots).
+- **Only emulators spawned by this plugin are stopped.** `stop()` sends `adb emu kill` only when
+  this process owns the emulator; a pre-existing/attached device (physical, remote adb or a
+  manually started emulator) is detached and left running.
 - **The guest is deliberately rooted and debuggable.** `adb root`, `ro.debuggable=1` and
   `ro.adb.secure=0` mean anything you install inside the VM is not sandboxed from root. Do not
   put real secrets or personal data in the AVD.
@@ -858,9 +906,9 @@ customization remain research notes in [DESIGN.md](DESIGN.md) §8.
 
 ## Known limitations
 
-- **Windows x64 is the only end-to-end verified platform.** SDK/adb/emulator/AVD discovery is
-  implemented for Windows, macOS and Linux, but emulator + H.264 behavior on macOS/Linux (and
-  `arm64-v8a` images on Apple Silicon) is unverified.
+- **Windows x64 and Linux x86_64 are the end-to-end verified platforms.** macOS SDK/adb/
+  emulator/AVD discovery and headless checks are implemented, but emulator + H.264 behavior on
+  macOS (and `arm64-v8a` images on Apple Silicon) is unverified.
 - **Hardware virtualization is mandatory** for the x86_64 AOSP image; pure TCG fails by design.
 - **Quick boot is snapshot-based.** Changing AVD configuration invalidates the snapshot; recreate
   it as described in [Troubleshooting](#quick-boot-fails-different-avd-configuration-black-screen-or-no-snapshot).

@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- SPDX-License-Identifier: MIT -->
+<resources>
+    <string name="app_name">dsh-apk-vm sample</string>
+    <string name="heading">dsh-apk-vm sample</string>
+    <string name="status_initial">Tap the button to greet the VM.</string>
+    <string name="button_say_hello">Say hello</string>
+    <string name="hello_message">Hello from dsh-apk-vm</string>
+</resources>

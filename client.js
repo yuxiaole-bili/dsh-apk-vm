@@ -118,7 +118,7 @@ window.__ModuleLoader__.load({
       'upload.drop': 'Drop APK to install',
       'upload.detail': 'Installs into the local emulator and launches it.',
       'upload.uploading': 'Uploading {name}…',
-      'upload.invalid': 'Please choose an .apk file',
+      'upload.invalid': 'Please choose an .apk, .apks or .xapk package',
       'upload.failed': 'Upload/install failed',
       'upload.done': 'Installed {name}',
       'apks.empty': 'No APK files found in the scan roots.',
@@ -169,6 +169,38 @@ window.__ModuleLoader__.load({
       'debug.rotate': 'Rotate',
       'debug.screenshot': 'Screenshot',
       'debug.recording': 'Recording 5s…',
+      'inspect.toggle': 'Inspect UI',
+      'inspect.title': 'UI inspector',
+      'inspect.loading': 'Reading UI tree…',
+      'inspect.empty': 'No visible UI nodes',
+      'inspect.hint': 'Click a highlighted node to generate an apk_vm command.',
+      'inspect.selected': 'Selected',
+      'inspect.copyTap': 'Copy tap_text',
+      'inspect.copyAssert': 'Copy assert_text',
+      'inspect.copied': 'Command copied',
+      'inspect.refresh': 'Refresh tree',
+      'inspect.close': 'Close inspector',
+      'network.title': 'Network',
+      'network.proxy': 'HTTP proxy',
+      'network.host': 'Proxy host',
+      'network.port': 'Port',
+      'network.apply': 'Apply proxy',
+      'network.clear': 'Clear proxy',
+      'network.caPath': 'CA certificate path (.pem/.crt)',
+      'network.installCa': 'Install CA',
+      'network.current': 'Current: {value}',
+      'flow.title': 'Flow recorder',
+      'flow.start': 'Record',
+      'flow.stop': 'Stop',
+      'flow.name': 'Flow name',
+      'flow.play': 'Play',
+      'flow.delete': 'Delete',
+      'flow.empty': 'No saved flows',
+      'flow.recording': 'Recording input…',
+      'flow.saved': 'Saved {name}',
+      'flow.done': 'Replayed {name}',
+      'flow.count': '{n} step(s)',
+      'apk.bundle': 'Bundle',
       'setup.title': 'Environment',
       'setup.ok': 'Ready',
       'setup.missing': 'Setup needed',
@@ -284,7 +316,7 @@ window.__ModuleLoader__.load({
       'upload.drop': '松开以安装 APK',
       'upload.detail': '上传后自动安装到本地模拟器并启动。',
       'upload.uploading': '正在上传 {name}…',
-      'upload.invalid': '请选择 .apk 文件',
+      'upload.invalid': '请选择 .apk、.apks 或 .xapk 安装包',
       'upload.failed': '上传/安装失败',
       'upload.done': '已安装 {name}',
       'apks.empty': '扫描目录中没有找到 APK 文件。',
@@ -335,6 +367,38 @@ window.__ModuleLoader__.load({
       'debug.rotate': '旋转',
       'debug.screenshot': '截图',
       'debug.recording': '正在录屏 5s…',
+      'inspect.toggle': '检查 UI',
+      'inspect.title': 'UI 检查器',
+      'inspect.loading': '正在读取 UI 树…',
+      'inspect.empty': '没有可见 UI 节点',
+      'inspect.hint': '点击高亮节点，生成可用的 apk_vm 命令。',
+      'inspect.selected': '已选择',
+      'inspect.copyTap': '复制 tap_text',
+      'inspect.copyAssert': '复制 assert_text',
+      'inspect.copied': '命令已复制',
+      'inspect.refresh': '刷新 UI 树',
+      'inspect.close': '关闭检查器',
+      'network.title': '网络',
+      'network.proxy': 'HTTP 代理',
+      'network.host': '代理主机',
+      'network.port': '端口',
+      'network.apply': '应用代理',
+      'network.clear': '清除代理',
+      'network.caPath': 'CA 证书路径（.pem/.crt）',
+      'network.installCa': '安装 CA',
+      'network.current': '当前：{value}',
+      'flow.title': '操作录制',
+      'flow.start': '录制',
+      'flow.stop': '停止',
+      'flow.name': '流程名称',
+      'flow.play': '回放',
+      'flow.delete': '删除',
+      'flow.empty': '还没有录制的流程',
+      'flow.recording': '正在录制输入…',
+      'flow.saved': '已保存 {name}',
+      'flow.done': '已回放 {name}',
+      'flow.count': '{n} 步',
+      'apk.bundle': '安装包',
       'setup.title': '环境',
       'setup.ok': '就绪',
       'setup.missing': '需要配置',
@@ -661,6 +725,7 @@ window.__ModuleLoader__.load({
           name: typeof item.name === 'string' && item.name ? item.name : baseName(item.path),
           size: Number(item.size),
           mtime: Number(item.mtime),
+          kind: typeof item.kind === 'string' ? item.kind : String(item.name || '').split('.').pop(),
         });
       }
       return { roots: roots, apks: apks };
@@ -818,6 +883,14 @@ window.__ModuleLoader__.load({
       '.apkvm-phone{display:flex;height:100%;padding:8px;border-radius:26px;border:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-layer-2);max-width:100%;max-height:100%;min-height:0;flex:none}' +
       '.apkvm-screen{position:relative;flex:none;height:100%;max-width:100%;aspect-ratio:9/19.5;border-radius:19px;overflow:hidden;background:var(--dsw-alias-bg-layer-1);display:flex;align-items:center;justify-content:center;touch-action:none;user-select:none;-webkit-user-select:none}' +
       '.apkvm-screen.ready{cursor:crosshair}' +
+      '.apkvm-inspect-layer{position:absolute;inset:0;z-index:3;overflow:hidden;pointer-events:none}' +
+      '.apkvm-inspect-box{position:absolute;border:1.5px solid var(--dsw-alias-brand-primary);background:color-mix(in srgb,var(--dsw-alias-brand-primary) 12%,transparent);border-radius:2px;pointer-events:auto;cursor:pointer;box-sizing:border-box}' +
+      '.apkvm-inspect-box:hover{background:color-mix(in srgb,var(--dsw-alias-brand-primary) 24%,transparent);border-color:var(--dsw-alias-label-primary)}' +
+      '.apkvm-inspect-box.selected{background:color-mix(in srgb,var(--dsw-alias-state-warn-primary) 25%,transparent);border-color:var(--dsw-alias-state-warn-primary);box-shadow:0 0 0 1px var(--dsw-alias-state-warn-primary)}' +
+      '.apkvm-inspect-box.target{border-style:dashed;background:color-mix(in srgb,var(--dsw-alias-brand-primary) 6%,transparent)}' +
+      '.apkvm-inspect-bar{position:absolute;left:8px;right:8px;bottom:8px;z-index:4;display:flex;flex-wrap:wrap;align-items:center;gap:6px;padding:7px 8px;border-radius:10px;border:1px solid var(--dsw-alias-border-l2);background:color-mix(in srgb,var(--dsw-alias-bg-base) 90%,transparent);backdrop-filter:blur(4px);font-size:11px}' +
+      '.apkvm-inspect-label{font-weight:600;color:var(--dsw-alias-label-primary);max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}' +
+      '.apkvm-inspect-meta{color:var(--dsw-alias-label-secondary);font-size:10.5px;white-space:nowrap}' +
       '.apkvm-frame{display:block;width:100%;height:100%;object-fit:contain;pointer-events:none}' +
       '.apkvm-overlay{position:absolute;inset:0;z-index:2;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:9px;padding:22px 18px;text-align:center;background:var(--dsw-alias-bg-layer-1)}' +
       '.apkvm-overlay-title{font-size:12.5px;font-weight:600;line-height:18px;color:var(--dsw-alias-label-primary);word-break:break-word}' +
@@ -1105,6 +1178,45 @@ window.__ModuleLoader__.load({
         var setLogLive = logLiveState[1];
         var logLiveTimerRef = React.useRef(null);
 
+        var inspectModeState = React.useState(false);
+        var inspectMode = inspectModeState[0];
+        var setInspectMode = inspectModeState[1];
+        var inspectNodesState = React.useState([]);
+        var inspectNodes = inspectNodesState[0];
+        var setInspectNodes = inspectNodesState[1];
+        var inspectSelectedState = React.useState(null);
+        var inspectSelected = inspectSelectedState[0];
+        var setInspectSelected = inspectSelectedState[1];
+        var inspectBusyState = React.useState(false);
+        var inspectBusy = inspectBusyState[0];
+        var setInspectBusy = inspectBusyState[1];
+        var inspectErrorState = React.useState('');
+        var inspectError = inspectErrorState[0];
+        var setInspectError = inspectErrorState[1];
+
+        var flowsState = React.useState([]);
+        var flows = flowsState[0];
+        var setFlows = flowsState[1];
+        var flowRecordingState = React.useState(false);
+        var flowRecording = flowRecordingState[0];
+        var setFlowRecording = flowRecordingState[1];
+        var flowNameState = React.useState('');
+        var flowName = flowNameState[0];
+        var setFlowName = flowNameState[1];
+        var flowBusyState = React.useState('');
+        var flowBusy = flowBusyState[0];
+        var setFlowBusy = flowBusyState[1];
+
+        var proxyState = React.useState({ host: '', port: '' });
+        var proxy = proxyState[0];
+        var setProxy = proxyState[1];
+        var proxyBusyState = React.useState(false);
+        var proxyBusy = proxyBusyState[0];
+        var setProxyBusy = proxyBusyState[1];
+        var caPathState = React.useState('');
+        var caPath = caPathState[0];
+        var setCaPath = caPathState[1];
+
         var actualFpsState = React.useState(0);
         var actualFps = actualFpsState[0];
         var setActualFps = actualFpsState[1];
@@ -1279,6 +1391,7 @@ window.__ModuleLoader__.load({
           loadApks();
           loadInstances();
           loadDevices();
+          loadFlows();
           var pollId = setInterval(function () {
             if (stateBusyRef.current) return;
             stateBusyRef.current = true;
@@ -1672,6 +1785,10 @@ window.__ModuleLoader__.load({
           setActualFps(0);
           setInstalledApps([]);
           setAppsError('');
+          setInspectMode(false);
+          setInspectNodes([]);
+          setInspectSelected(null);
+          loadFlows();
           stopLiveLogcat();
           frameStatsRef.current = [];
           loadState();
@@ -1788,6 +1905,271 @@ window.__ModuleLoader__.load({
             }
             setApksBusy(false);
             return result;
+          });
+        }
+
+        function loadInspector() {
+          if (!ready || inspectBusy) return Promise.resolve(null);
+          setInspectBusy(true);
+          setInspectError('');
+          return requestJson(instancePath('/debug/inspect'), null, T).then(function (result) {
+            if (!mountedRef.current) return result;
+            setInspectBusy(false);
+            if (!result.ok) {
+              setInspectError(result.error || T('err.action'));
+              return result;
+            }
+            var data = isObject(result.data) ? result.data : {};
+            var nodes = Array.isArray(data.nodes) ? data.nodes : [];
+            setInspectNodes(nodes);
+            setInspectSelected(null);
+            return result;
+          });
+        }
+
+        function toggleInspectMode() {
+          var next = !inspectMode;
+          setInspectMode(next);
+          if (next) {
+            loadInspector();
+          } else {
+            setInspectSelected(null);
+          }
+        }
+
+        function copyInspectCommand(kind) {
+          var node = inspectSelected;
+          if (!node || !node.selector) return;
+          var text = kind === 'assert' ? node.selector.assertCommand : node.selector.tapCommand;
+          try {
+            if (typeof navigator !== 'undefined' && navigator.clipboard && navigator.clipboard.writeText) {
+              navigator.clipboard.writeText(text).then(
+                function () {
+                  pushToast('success', T('inspect.copied') + ': ' + text);
+                },
+                function () {
+                  pushToast('error', T('inspect.copied') + ': ' + text);
+                }
+              );
+            } else {
+              pushToast('success', T('inspect.copied') + ': ' + text);
+            }
+          } catch (error) {
+            pushToast('success', T('inspect.copied') + ': ' + text);
+          }
+        }
+
+        function nodeBoundingStyle(node) {
+          var target = inputScreen || displayScreen;
+          if (!target || !node || !node.bounds) return null;
+          var b = node.bounds;
+          var width = Number(target.width) || 0;
+          var height = Number(target.height) || 0;
+          if (!(width > 0) || !(height > 0) || !(b.width > 0) || !(b.height > 0)) return null;
+          return {
+            left: ((b.x1 / width) * 100).toFixed(4) + '%',
+            top: ((b.y1 / height) * 100).toFixed(4) + '%',
+            width: ((b.width / width) * 100).toFixed(4) + '%',
+            height: ((b.height / height) * 100).toFixed(4) + '%',
+          };
+        }
+
+        function renderInspector() {
+          if (!inspectMode || !ready) return null;
+          var nodes = inspectNodes.filter(function (node) {
+            return node && node.bounds && (node.interactive || node.clickable || node.text || node.contentDesc);
+          });
+          var boxes = nodes.slice(0, 160).map(function (node) {
+            var style = nodeBoundingStyle(node);
+            if (!style) return null;
+            var selected = inspectSelected && inspectSelected.order === node.order;
+            return h('div', {
+              key: 'inspect-' + node.order,
+              className: 'apkvm-inspect-box' + (selected ? ' selected' : ''),
+              style: style,
+              title: node.selector ? node.selector.selector : node.label,
+              onClick: function (event) {
+                if (event && typeof event.stopPropagation === 'function') event.stopPropagation();
+                setInspectSelected(node);
+              },
+            });
+          });
+          var bar = h(
+            'div',
+            { className: 'apkvm-inspect-bar' },
+            h('span', { className: 'apkvm-inspect-label' }, T('inspect.title')),
+            h(
+              'span',
+              { className: 'apkvm-inspect-meta' },
+              inspectBusy ? T('inspect.loading') : T('flow.count', { n: nodes.length })
+            ),
+            h('span', { style: { flex: '1 1 auto' } }),
+            actionBtn(T('inspect.refresh'), {
+              key: 'inspect-refresh',
+              small: true,
+              disabled: inspectBusy,
+              onClick: loadInspector,
+            }),
+            actionBtn(T('inspect.close'), {
+              key: 'inspect-close',
+              small: true,
+              onClick: toggleInspectMode,
+            })
+          );
+          var selectedBar = inspectSelected
+            ? h(
+                'div',
+                { className: 'apkvm-inspect-bar', style: { bottom: '52px' } },
+                h('span', { className: 'apkvm-inspect-label' }, inspectSelected.label || T('inspect.selected')),
+                h(
+                  'span',
+                  { className: 'apkvm-inspect-meta' },
+                  inspectSelected.selector ? inspectSelected.selector.selector : ''
+                ),
+                h('span', { style: { flex: '1 1 auto' } }),
+                actionBtn(T('inspect.copyTap'), {
+                  key: 'inspect-copy-tap',
+                  small: true,
+                  onClick: function () {
+                    copyInspectCommand('tap');
+                  },
+                }),
+                actionBtn(T('inspect.copyAssert'), {
+                  key: 'inspect-copy-assert',
+                  small: true,
+                  onClick: function () {
+                    copyInspectCommand('assert');
+                  },
+                })
+              )
+            : null;
+          return h(
+            'div',
+            { className: 'apkvm-inspect-layer' },
+            boxes,
+            inspectError ? h('div', { className: 'apkvm-inspect-bar', style: { bottom: '52px' } }, inspectError) : null,
+            bar,
+            selectedBar
+          );
+        }
+
+        function flowPath(suffix) {
+          var id = activeInstanceRef.current || 'default';
+          var base = id === 'default' ? '/apk-vm/flows' : '/apk-vm/instances/' + encodeURIComponent(id) + '/flows';
+          return base + (suffix || '');
+        }
+
+        function loadFlows() {
+          return requestJson(flowPath(''), null, T).then(function (result) {
+            if (!mountedRef.current) return result;
+            if (result.ok && isObject(result.data) && Array.isArray(result.data.flows)) {
+              setFlows(result.data.flows);
+              setFlowRecording(result.data.recording === true);
+            }
+            return result;
+          });
+        }
+
+        function toggleFlowRecording() {
+          var starting = !flowRecording;
+          requestJson(
+            flowPath(''),
+            { method: 'POST', body: JSON.stringify({ action: starting ? 'start' : 'stop', name: flowName || '' }) },
+            T
+          ).then(function (result) {
+            if (!mountedRef.current) return;
+            if (!result.ok) {
+              pushToast('error', T('err.action') + ': ' + result.error);
+              return;
+            }
+            setFlowRecording(starting);
+            if (!starting) {
+              setFlowName('');
+              loadFlows();
+              pushToast('success', T('flow.saved', { name: (result.data && result.data.name) || 'flow' }));
+            } else {
+              pushToast('success', T('flow.recording'));
+            }
+          });
+        }
+
+        function replayFlow(id) {
+          if (!id || flowBusy) return;
+          setFlowBusy(id);
+          requestJson(flowPath(''), { method: 'POST', body: JSON.stringify({ action: 'replay', id: id }) }, T).then(function (result) {
+            if (!mountedRef.current) return;
+            setFlowBusy('');
+            if (!result.ok) {
+              pushToast('error', T('err.action') + ': ' + result.error);
+              return;
+            }
+            pushToast('success', T('flow.done', { name: id }));
+            loadState();
+          });
+        }
+
+        function deleteFlow(id) {
+          if (!id || flowBusy) return;
+          setFlowBusy(id);
+          requestJson(flowPath(''), { method: 'POST', body: JSON.stringify({ action: 'delete', id: id }) }, T).then(function (result) {
+            if (!mountedRef.current) return;
+            setFlowBusy('');
+            if (!result.ok) {
+              pushToast('error', T('err.action') + ': ' + result.error);
+              return;
+            }
+            loadFlows();
+          });
+        }
+
+        function applyProxy() {
+          if (proxyBusy) return;
+          setProxyBusy(true);
+          requestJson(
+            instancePath('/debug/proxy'),
+            { method: 'POST', body: JSON.stringify({ host: proxy.host, port: proxy.port, enabled: true }) },
+            T
+          ).then(function (result) {
+            if (!mountedRef.current) return;
+            setProxyBusy(false);
+            if (!result.ok) {
+              pushToast('error', T('err.action') + ': ' + result.error);
+              return;
+            }
+            pushToast('success', T('network.current', { value: (result.data && result.data.proxy) || 'off' }));
+          });
+        }
+
+        function clearProxy() {
+          if (proxyBusy) return;
+          setProxyBusy(true);
+          requestJson(instancePath('/debug/proxy'), { method: 'DELETE' }, T).then(function (result) {
+            if (!mountedRef.current) return;
+            setProxyBusy(false);
+            if (!result.ok) {
+              pushToast('error', T('err.action') + ': ' + result.error);
+              return;
+            }
+            pushToast('success', T('network.clear'));
+          });
+        }
+
+        function installCa() {
+          if (proxyBusy) return;
+          var certPath = String(caPath || '').trim();
+          if (!certPath) {
+            pushToast('error', T('network.caPath'));
+            return;
+          }
+          setProxyBusy(true);
+          requestJson(instancePath('/debug/ca'), { method: 'POST', body: JSON.stringify({ path: certPath }) }, T).then(function (result) {
+            if (!mountedRef.current) return;
+            setProxyBusy(false);
+            if (!result.ok) {
+              pushToast('error', T('err.action') + ': ' + result.error);
+              return;
+            }
+            pushToast('success', T('network.installCa') + ': ' + (result.data && result.data.hash ? result.data.hash + '.0' : 'ok'));
           });
         }
 
@@ -2020,7 +2402,7 @@ window.__ModuleLoader__.load({
         function uploadApkFile(file) {
           if (!file) return;
           var name = String(file.name || 'upload.apk');
-          if (!/\.apk$/i.test(name)) {
+          if (!/\.(?:apk|apks|xapk)$/i.test(name)) {
             pushToast('error', T('upload.invalid'));
             return;
           }
@@ -2363,6 +2745,7 @@ window.__ModuleLoader__.load({
         }
 
         function onPointerDown(event) {
+          if (inspectMode) return;
           if (!ready || !inputScreen) return;
           if (event.pointerType === 'mouse' && event.button !== 0 && event.button !== undefined) return;
           var node = screenRef.current;
@@ -2433,6 +2816,7 @@ window.__ModuleLoader__.load({
         }
 
         function onPointerUp(event) {
+          if (inspectMode) return;
           var multi = multiTouchRef.current;
           if (multi && multi.pointers.has(event.pointerId)) {
             postTouch('up', event.pointerId, event.clientX, event.clientY);
@@ -2578,6 +2962,9 @@ window.__ModuleLoader__.load({
                 },
               }),
               h('span', { className: 'apkvm-apk-name', title: apk.path }, apk.name),
+              apk.kind && apk.kind !== 'apk'
+                ? h('span', { className: 'apkvm-tag' }, String(apk.kind).toUpperCase())
+                : null,
               h('span', { className: 'apkvm-dim', style: { flex: 'none' } }, formatBytes(apk.size))
             ),
             h(
@@ -2892,7 +3279,7 @@ window.__ModuleLoader__.load({
             ref: fileInputRef,
             className: 'apkvm-fileinput',
             type: 'file',
-            accept: '.apk,application/vnd.android.package-archive',
+            accept: '.apk,.apks,.xapk,application/vnd.android.package-archive,application/octet-stream',
             onChange: onFileInputChange,
             'aria-label': T('upload.button'),
           }),
@@ -3274,6 +3661,159 @@ window.__ModuleLoader__.load({
           )
         );
 
+        var flowCard = h(
+          'details',
+          { className: 'apkvm-card apkvm-debug' },
+          h(
+            'summary',
+            { className: 'apkvm-debug-summary' },
+            h('span', { className: 'apkvm-card-title' }, T('flow.title')),
+            h('span', { className: 'apkvm-tag' + (flowRecording ? ' ok' : '') }, flowRecording ? T('flow.recording') : T('flow.count', { n: flows.length })),
+            h('span', { className: 'apkvm-chevron', 'aria-hidden': 'true' }, '▸')
+          ),
+          h(
+            'div',
+            { className: 'apkvm-debug-body' },
+            h(
+              'div',
+              { style: { display: 'flex', alignItems: 'center', gap: '6px' } },
+              h('input', {
+                className: 'apkvm-input',
+                type: 'text',
+                value: flowName,
+                placeholder: T('flow.name'),
+                disabled: flowRecording,
+                onChange: function (event) {
+                  setFlowName(event && event.target ? String(event.target.value) : '');
+                },
+                'aria-label': T('flow.name'),
+              }),
+              actionBtn(flowRecording ? T('flow.stop') : T('flow.start'), {
+                key: 'flow-record',
+                small: true,
+                variant: flowRecording ? 'danger' : 'primary',
+                disabled: !ready,
+                onClick: toggleFlowRecording,
+              })
+            ),
+            flows.length
+              ? h(
+                  'div',
+                  { className: 'apkvm-list', style: { maxHeight: '140px' } },
+                  flows.slice(0, 12).map(function (flow) {
+                    return h(
+                      'div',
+                      { className: 'apkvm-apk', key: flow.id },
+                      h('span', { className: 'apkvm-apk-name' }, flow.name || flow.id),
+                      h(
+                        'span',
+                        { style: { display: 'flex', gap: '5px', alignItems: 'center' } },
+                        h('span', { className: 'apkvm-dim' }, T('flow.count', { n: flow.events || 0 })),
+                        actionBtn(T('flow.play'), {
+                          key: 'flow-play-' + flow.id,
+                          small: true,
+                          disabled: !ready || Boolean(flowBusy),
+                          onClick: function () {
+                            replayFlow(flow.id);
+                          },
+                        }),
+                        actionBtn(T('flow.delete'), {
+                          key: 'flow-delete-' + flow.id,
+                          small: true,
+                          variant: 'danger',
+                          disabled: Boolean(flowBusy),
+                          onClick: function () {
+                            deleteFlow(flow.id);
+                          },
+                        })
+                      )
+                    );
+                  })
+                )
+              : h('div', { className: 'apkvm-dim' }, T('flow.empty'))
+          )
+        );
+
+        var networkCard = h(
+          'details',
+          { className: 'apkvm-card apkvm-debug' },
+          h(
+            'summary',
+            { className: 'apkvm-debug-summary' },
+            h('span', { className: 'apkvm-card-title' }, T('network.title')),
+            h('span', { className: 'apkvm-tag' }, T('network.proxy')),
+            h('span', { className: 'apkvm-chevron', 'aria-hidden': 'true' }, '▸')
+          ),
+          h(
+            'div',
+            { className: 'apkvm-debug-body' },
+            h(
+              'div',
+              { style: { display: 'flex', alignItems: 'center', gap: '6px' } },
+              h('input', {
+                className: 'apkvm-input',
+                type: 'text',
+                value: proxy.host,
+                placeholder: T('network.host'),
+                spellCheck: false,
+                disabled: proxyBusy,
+                onChange: function (event) {
+                  setProxy({ host: event && event.target ? String(event.target.value) : '', port: proxy.port });
+                },
+                'aria-label': T('network.host'),
+              }),
+              h('input', {
+                className: 'apkvm-input',
+                type: 'text',
+                value: proxy.port,
+                placeholder: T('network.port'),
+                spellCheck: false,
+                disabled: proxyBusy,
+                style: { maxWidth: '86px' },
+                onChange: function (event) {
+                  setProxy({ host: proxy.host, port: event && event.target ? String(event.target.value) : '' });
+                },
+                'aria-label': T('network.port'),
+              })
+            ),
+            h('input', {
+              className: 'apkvm-input',
+              type: 'text',
+              value: caPath,
+              placeholder: T('network.caPath'),
+              spellCheck: false,
+              disabled: proxyBusy,
+              onChange: function (event) {
+                setCaPath(event && event.target ? String(event.target.value) : '');
+              },
+              'aria-label': T('network.caPath'),
+            }),
+            h(
+              'div',
+              { style: { display: 'flex', alignItems: 'center', gap: '5px', flexWrap: 'wrap' } },
+              actionBtn(T('network.apply'), {
+                key: 'proxy-apply',
+                small: true,
+                disabled: !ready || proxyBusy || !proxy.host.trim() || !proxy.port.trim(),
+                onClick: applyProxy,
+              }),
+              actionBtn(T('network.clear'), {
+                key: 'proxy-clear',
+                small: true,
+                disabled: !ready || proxyBusy,
+                onClick: clearProxy,
+              }),
+              actionBtn(T('network.installCa'), {
+                key: 'ca-install',
+                small: true,
+                disabled: !ready || proxyBusy,
+                onClick: installCa,
+              })
+            ),
+            h('div', { className: 'apkvm-dim' }, T('network.caPath'))
+          )
+        );
+
         var primaryAction =
           ready || busyState
             ? actionBtn(vmBusy ? T('action.stopping') : T('action.stop'), {
@@ -3458,7 +3998,7 @@ window.__ModuleLoader__.load({
             : null;
 
         function onScreenKeyDown(event) {
-          if (!ready || !event) return;
+          if (!ready || inspectMode || !event) return;
           var target = event.target;
           if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA')) return;
           var keyMap = {
@@ -3520,6 +4060,7 @@ window.__ModuleLoader__.load({
                 },
               })
             : null,
+          renderInspector(),
           renderOverlay()
         );
 
@@ -3543,6 +4084,13 @@ window.__ModuleLoader__.load({
               small: true,
               disabled: !ready,
               onClick: downloadScreenshot,
+            }),
+            actionBtn(inspectMode ? T('inspect.close') : T('inspect.toggle'), {
+              key: 'inspect-toggle',
+              small: true,
+              variant: inspectMode ? 'primary' : undefined,
+              disabled: !ready || inspectBusy,
+              onClick: toggleInspectMode,
             }),
             h(
               'div',
@@ -3599,6 +4147,8 @@ window.__ModuleLoader__.load({
               apkCard,
               instancesCard,
               debugCard,
+              flowCard,
+              networkCard,
               appsCard,
               diagCard,
               h('div', { className: 'apkvm-footnote', title: T('hint.boot') }, T('hint.short')),

@@ -1,0 +1,3 @@
+# Build intermediates; the signed APK is committed on purpose so the demo runs
+# without a local Android SDK.
+build/

@@ -431,15 +431,32 @@ async function main() {
   });
 
   // --- stop / dispose -------------------------------------------------------
-  await check('stop(): disconnects the VM and returns to stopped', async () => {
+  await check('stop(): kills/disconnects a device this VM spawned', async () => {
     const vm = new AndroidVm({ serial: '127.0.0.1:5555', shutdownTimeoutMs: 3000 });
     const mock = attachMock(vm);
+    vm._spawnedByUs = true;
     await vm.status();
     const snapshot = await vm.stop();
     assert.equal(snapshot.state, 'stopped');
     assert.equal(snapshot.serial, null);
     assert.ok(mock.state.calls.some((args) => args.includes('emu') && args.includes('kill')));
     assert.deepEqual(mock.state.disconnectCalls, ['127.0.0.1:5555']);
+  });
+
+  await check('stop(): never kills a pre-existing auto-attached emulator', async () => {
+    const vm = new AndroidVm({ serial: 'emulator-5555', shutdownTimeoutMs: 800 });
+    const mock = attachMock(vm);
+    await vm.status();
+    assert.equal(vm._spawnedByUs, false);
+    const snapshot = await vm.stop();
+    assert.equal(snapshot.state, 'stopped');
+    assert.equal(snapshot.serial, null);
+    assert.equal(
+      mock.state.calls.some((args) => args.includes('emu') && args.includes('kill')),
+      false,
+      'must not send adb emu kill to a device it did not spawn',
+    );
+    assert.deepEqual(mock.state.disconnectCalls, [], 'must not disconnect a pre-existing device');
   });
 
   await check('dispose(): idempotent, stopped, and disposal blocks start()', async () => {

@@ -1,6 +1,6 @@
 {
   "name": "dsh-apk-vm",
-  "version": "0.3.13",
+  "version": "0.4.0",
   "type": "module",
   "description": "Local AOSP Android VM for DeepSeek Harness: preview rooted APKs at up to 60 fps, automate UIAutomator flows, and give each Agent an isolated VM.",
   "license": "Apache-2.0",
@@ -25,9 +25,9 @@
     "registry": "https://registry.npmjs.org/"
   },
   "scripts": {
-    "check": "node --check index.js && node --check client.js && node --check lib/android.js && node --check lib/scrcpy.js && node --check lib/ws.js && node --check lib/setup.js && node --check lib/instances.js && node --check lib/video-stream.js",
+    "check": "node --check index.js && node --check client.js && node --check lib/android.js && node --check lib/apk-bundle.js && node --check lib/flows.js && node --check lib/ui-inspector.js && node --check lib/x509.js && node --check lib/scrcpy.js && node --check lib/ws.js && node --check lib/setup.js && node --check lib/instances.js && node --check lib/video-stream.js",
     "privacy": "node scripts/privacy-scan.mjs",
-    "test": "node spike/ui-smoke.cjs && node spike/ui-better-sidebar-smoke.cjs && node spike/setup-smoke.mjs && node spike/android/mock-device.mjs && node spike/android/launch-plan.mjs && node spike/instances-smoke.mjs"
+    "test": "node spike/ui-smoke.cjs && node spike/ui-better-sidebar-smoke.cjs && node spike/setup-smoke.mjs && node spike/android/mock-device.mjs && node spike/android/launch-plan.mjs && node spike/instances-smoke.mjs && node spike/features.mjs"
   },
   "exports": {
     ".": "./index.js",
@@ -41,11 +41,15 @@
     "client.js",
     "cordis.patch.yml",
     "lib/android.js",
+    "lib/apk-bundle.js",
+    "lib/flows.js",
     "lib/scrcpy.js",
+    "lib/ui-inspector.js",
     "lib/ws.js",
     "lib/setup.js",
     "lib/instances.js",
     "lib/video-stream.js",
+    "lib/x509.js",
     "lib/vendor/scrcpy-server-v5.0.1.jar",
     "LICENSE",
     "NOTICE",
@@ -56,6 +60,7 @@
     "docs/RELEASING.md",
     "docs/PRIVACY.md",
     "docs/SUBMISSION.md",
+    "docs/LINUX-E2E.md",
     "docs/*.png",
     "scripts/privacy-scan.mjs",
     "locale/*.json",

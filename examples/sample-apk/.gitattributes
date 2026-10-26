@@ -1,0 +1,3 @@
+# Keep binary demo assets intact when the repository is checked out.
+*.keystore binary
+*.apk binary

@@ -38,8 +38,9 @@ DSH Desktop（`desktop` profile）通过 **Plugins → add/install local bundle*
 ### 兼容与运行要求
 
 - DSH Desktop `0.2.1-rc.3` 已实测；静态 bundle/plugin API。
-- Windows x64 为唯一端到端验证平台（启动、H.264、root 调试、Agent tool）；macOS/Linux 有
-  headless setup/CI 覆盖，但未做真实模拟器运行验证。
+- Windows x64 与 Linux x86_64（headless，KVM + SwiftShader）为端到端验证平台（启动、
+  H.264、root 调试、APK 安装、Agent tool）；macOS 有 SDK 探测/headless CI 覆盖，但未做
+  真实模拟器运行验证。详见 `docs/LINUX-E2E.md`。
 - 需要 Android SDK/emulator/platform-tools、Android 14 x86_64 system image、AVD，以及
   AEHD/WHPX（Windows）、KVM（Linux）或 HVF（macOS）硬件虚拟化。
 - 每个运行中的 VM 约占 2.5 GB 内存；默认最多 3 个额外实例。

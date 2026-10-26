@@ -26,6 +26,8 @@ import { InstanceManager } from './lib/instances.js';
 import { ScrcpySession, annexbToAvcc, CONTROL_MESSAGE_TYPE } from './lib/scrcpy.js';
 import { detectEnvironment, createAvd, installSystemImage, installSdkPackages, bootstrapSdk, DEFAULT_SYSTEM_IMAGE } from './lib/setup.js';
 import { acceptWebSocket } from './lib/ws.js';
+import { parseUiHierarchy, decorateUiNodes, buildInspectorPayload } from './lib/ui-inspector.js';
+import { FlowRecorder } from './lib/flows.js';
 
 export const name = 'dsh-apk-vm';
 
@@ -207,7 +209,7 @@ function resolveApkPath(candidate, roots) {
   for (const p of paths) {
     try {
       const resolved = path.resolve(p);
-      if (!resolved.toLowerCase().endsWith('.apk')) continue;
+      if (!/\.(?:apk|apks|xapk)$/i.test(resolved)) continue;
       if (existsSync(resolved)) return resolved;
     } catch {
       /* try next */
@@ -269,6 +271,7 @@ export function apply(ctx, config = {}) {
   let serverOrigin = null;
   let registerInstanceRoutes = null;
   let disposeInstanceRoutes = null;
+  const flowRecorder = new FlowRecorder();
   if (instanceManager) {
     instanceManager.onCreated = (id) => {
       registerInstanceRoutes?.(id);
@@ -602,8 +605,8 @@ export function apply(ctx, config = {}) {
     let apkPath;
     if (options.trustedPath === true) {
       apkPath = path.resolve(String(candidate || ''));
-      if (!apkPath.toLowerCase().endsWith('.apk') || !existsSync(apkPath)) {
-        throw new Error(`uploaded APK is missing or invalid: ${apkPath}`);
+      if (!/\.(?:apk|apks|xapk)$/i.test(apkPath) || !existsSync(apkPath)) {
+        throw new Error(`uploaded APK/bundle is missing or invalid: ${apkPath}`);
       }
     } else {
       apkPath = resolveApkPath(candidate, rootsFor());
@@ -618,6 +621,7 @@ export function apply(ctx, config = {}) {
       launchActivity: meta.launchActivity || null,
       launched: meta.launched !== false,
       installedAt: Date.now(),
+      bundle: meta.bundle || null,
     };
     frame.buffer = null;
     frame.at = 0;
@@ -810,6 +814,59 @@ export function apply(ctx, config = {}) {
         }),
       );
     };
+
+    async function handleFlowRequest(req, res, instanceId, inputFn) {
+      if (req.method === 'GET') {
+        sendJson(res, 200, {
+          ok: true,
+          instance: instanceId,
+          recording: flowRecorder.isRecording(instanceId),
+          flows: await flowRecorder.list(instanceId),
+        });
+        return;
+      }
+      if (req.method !== 'POST') {
+        sendError(res, 405, 'GET or POST only');
+        return;
+      }
+      const body = await readJsonBody(req);
+      const action = String(body.action || '').toLowerCase();
+      try {
+        if (action === 'start') {
+          const flow = flowRecorder.start(instanceId, body.name);
+          sendJson(res, 200, { ok: true, action, ...flow });
+          return;
+        }
+        if (action === 'stop') {
+          const flow = await flowRecorder.stop(instanceId);
+          sendJson(res, 200, { ok: true, action, ...flow });
+          return;
+        }
+        if (action === 'replay') {
+          if (!body.id) throw new Error('replay requires id');
+          const result = await flowRecorder.replay(body.id, inputFn, { instanceId });
+          sendJson(res, 200, { ok: true, action, ...result });
+          return;
+        }
+        if (action === 'delete') {
+          if (!body.id) throw new Error('delete requires id');
+          const removed = await flowRecorder.remove(body.id, instanceId);
+          sendJson(res, 200, { ok: true, action, removed });
+          return;
+        }
+        throw new Error(`unsupported flow action: ${action || '(missing)'}`);
+      } catch (error) {
+        sendError(res, 400, error.message);
+      }
+    }
+
+    register('/apk-vm/flows', async (req, res) => {
+      await handleFlowRequest(req, res, 'default', async (payload) => {
+        const status = await vm.status();
+        if (!isReady(status)) throw new Error(`VM is not ready (state: ${status.state})`);
+        return vm.input(payload);
+      });
+    });
 
     register('/apk-vm/state', async (req, res) => {
       if (req.method !== 'GET' && req.method !== 'HEAD') {
@@ -1077,8 +1134,18 @@ export function apply(ctx, config = {}) {
       }
       if (rest === 'input' && req.method === 'POST') {
         if (!(await ready())) return;
-        await instance.input(await readJsonBody(req));
+        const body = await readJsonBody(req);
+        flowRecorder.record(id, body);
+        await instance.input(body);
         sendJson(res, 200, { ok: true });
+        return;
+      }
+      if (rest === 'flows') {
+        await handleFlowRequest(req, res, id, async (payload) => {
+          const status = await instance.status();
+          if (status.state !== 'ready') throw new Error(`instance ${id} is not ready (state: ${status.state})`);
+          return instance.input(payload);
+        });
         return;
       }
       if (rest === 'touch' && req.method === 'POST') {
@@ -1188,6 +1255,39 @@ export function apply(ctx, config = {}) {
           sendJson(res, 200, await instance.uiDump());
           return;
         }
+        if (op === 'inspect' && req.method === 'GET') {
+          if (!(await ready())) return;
+          const dump = await instance.uiDump();
+          let screen = null;
+          try {
+            screen = await instance.vm.screenSize();
+          } catch {
+            screen = null;
+          }
+          sendJson(res, 200, buildInspectorPayload(dump, screen));
+          return;
+        }
+        if (op === 'proxy' && ['GET', 'POST', 'DELETE'].includes(req.method)) {
+          if (!(await ready())) return;
+          try {
+            if (req.method === 'GET') sendJson(res, 200, await instance.vm.getProxy());
+            else if (req.method === 'DELETE') sendJson(res, 200, await instance.vm.setProxy({ enabled: false }));
+            else sendJson(res, 200, await instance.vm.setProxy(await readJsonBody(req)));
+          } catch (error) {
+            sendError(res, 400, error.message);
+          }
+          return;
+        }
+        if (op === 'ca' && req.method === 'POST') {
+          if (!(await ready())) return;
+          try {
+            const body = await readJsonBody(req);
+            sendJson(res, 200, await instance.vm.installCaCertificate(body.path));
+          } catch (error) {
+            sendError(res, 400, error.message);
+          }
+          return;
+        }
         if (op === 'record' && req.method === 'POST') {
           if (!(await ready())) return;
           sendJson(res, 200, await instance.screenRecord({ seconds: (await readJsonBody(req)).seconds }));
@@ -1271,6 +1371,9 @@ export function apply(ctx, config = {}) {
         'debug/root',
         'debug/rotate',
         'debug/ui',
+        'debug/inspect',
+        'debug/proxy',
+        'debug/ca',
         'debug/record',
         'debug/perf',
         'debug/screenshot',
@@ -1278,6 +1381,7 @@ export function apply(ctx, config = {}) {
         'debug/push',
         'debug/pull',
         'debug/reboot',
+        'flows',
       ];
       const disposers = [];
       for (const suffix of suffixes) {
@@ -1550,7 +1654,7 @@ export function apply(ctx, config = {}) {
       }
       let safeName = path.basename(rawName || 'upload.apk').replace(/[^A-Za-z0-9._-]+/g, '_');
       if (!safeName) safeName = 'upload.apk';
-      if (!/\.apk$/i.test(safeName)) safeName += '.apk';
+      if (!/\.(?:apk|apks|xapk)$/i.test(safeName)) safeName += '.apk';
       let data;
       try {
         data = await readRawBody(req, UPLOAD_LIMIT_BYTES);
@@ -1616,6 +1720,7 @@ export function apply(ctx, config = {}) {
         sendError(res, 409, `VM is not ready (state: ${status.state})`);
         return;
       }
+      flowRecorder.record('default', body);
       await vm.input(body);
       sendJson(res, 200, { ok: true });
     });
@@ -1859,6 +1964,58 @@ export function apply(ctx, config = {}) {
       sendJson(res, 200, await vm.uiDump());
     });
 
+    register('/apk-vm/debug/inspect', async (req, res) => {
+      if (req.method !== 'GET') {
+        sendError(res, 405, 'GET only');
+        return;
+      }
+      if (!(await ensureDebugReady(res))) return;
+      const dump = await vm.uiDump();
+      let screen = null;
+      try {
+        screen = await vm.screenSize();
+      } catch {
+        screen = null;
+      }
+      sendJson(res, 200, buildInspectorPayload(dump, screen));
+    });
+
+    register('/apk-vm/debug/proxy', async (req, res) => {
+      if (!['GET', 'POST', 'DELETE'].includes(req.method)) {
+        sendError(res, 405, 'GET, POST or DELETE only');
+        return;
+      }
+      if (!(await ensureDebugReady(res))) return;
+      try {
+        if (req.method === 'GET') {
+          sendJson(res, 200, await vm.getProxy());
+          return;
+        }
+        if (req.method === 'DELETE') {
+          sendJson(res, 200, await vm.setProxy({ enabled: false }));
+          return;
+        }
+        const body = await readJsonBody(req);
+        sendJson(res, 200, await vm.setProxy(body));
+      } catch (error) {
+        sendError(res, 400, error.message);
+      }
+    });
+
+    register('/apk-vm/debug/ca', async (req, res) => {
+      if (req.method !== 'POST') {
+        sendError(res, 405, 'POST only');
+        return;
+      }
+      if (!(await ensureDebugReady(res))) return;
+      try {
+        const body = await readJsonBody(req);
+        sendJson(res, 200, await vm.installCaCertificate(body.path));
+      } catch (error) {
+        sendError(res, 400, error.message);
+      }
+    });
+
     register('/apk-vm/debug/record', async (req, res) => {
       if (req.method !== 'POST') {
         sendError(res, 405, 'POST only');
@@ -2039,7 +2196,10 @@ export function apply(ctx, config = {}) {
       getprop: (name) => vm.getprop(name),
       setprop: (name, value) => vm.setprop(name, value),
       listPackages: (options) => vm.listPackages(options),
-      input: (payload) => vm.input(payload),
+      input: (payload) => {
+        flowRecorder.record('default', payload);
+        return vm.input(payload);
+      },
       getClipboard: async () => {
         const session = scrcpyState && scrcpyState.session;
         if (!session || session.state !== 'running') throw new Error('H.264 control stream is not running');
@@ -2059,6 +2219,10 @@ export function apply(ctx, config = {}) {
       uninstall: (pkg) => vm.uninstall(pkg),
       rotate: (orientation) => vm.rotate(orientation),
       uiDump: () => vm.uiDump(),
+      screenSize: () => vm.screenSize(),
+      getProxy: () => vm.getProxy(),
+      setProxy: (options) => vm.setProxy(options),
+      installCaCertificate: (certPath) => vm.installCaCertificate(certPath),
       screenRecord: (options) => vm.screenRecord(options),
       perfSnapshot: () => vm.perfSnapshot(),
       screenshot: async () => {
@@ -2084,7 +2248,10 @@ export function apply(ctx, config = {}) {
       getprop: (name) => instance.getprop(name),
       setprop: (name, value) => instance.setprop(name, value),
       listPackages: (options) => instance.listPackages(options),
-      input: (payload) => instance.input(payload),
+      input: (payload) => {
+        flowRecorder.record(instance.id, payload);
+        return instance.input(payload);
+      },
       getClipboard: () => instance.getClipboard(),
       setClipboard: (text, paste) => instance.setClipboard(text, paste),
       install: async (apkPath) => instance.installApk(resolveApkPath(apkPath, rootsFor())),
@@ -2096,6 +2263,10 @@ export function apply(ctx, config = {}) {
       uninstall: (pkg) => instance.uninstall(pkg),
       rotate: (orientation) => instance.rotate(orientation),
       uiDump: () => instance.uiDump(),
+      screenSize: () => instance.vm.screenSize(),
+      getProxy: () => instance.vm.getProxy(),
+      setProxy: (options) => instance.vm.setProxy(options),
+      installCaCertificate: (certPath) => instance.vm.installCaCertificate(certPath),
       screenRecord: (options) => instance.screenRecord(options),
       perfSnapshot: () => instance.perfSnapshot(),
       screenshot: async () => {
@@ -2197,8 +2368,8 @@ export function apply(ctx, config = {}) {
       'Operate the local rooted Android APK virtual machine (Android emulator) that the APK VM panel manages. ' +
       'The VM is usually already running (warm start); adbd runs as root once ready. ' +
       'Actions: info, shell, logcat, getprop, setprop, packages, install, push, pull, reboot, root, ' +
-      'force_stop, clear_data, uninstall, rotate, ui_dump, record, perf, screenshot, tap, swipe, long_press, key, text, ' +
-      'apk_info, find_ui, assert_text, tap_text, clipboard_get, clipboard_set, devices, attach_device, detach_device, start, stop, list_instances, create_instance, destroy_instance. ' +
+      'force_stop, clear_data, uninstall, rotate, ui_dump, inspect_ui, proxy, install_ca, record, perf, screenshot, tap, swipe, long_press, key, text, ' +
+      'apk_info, find_ui, assert_text, tap_text, clipboard_get, clipboard_set, devices, attach_device, detach_device, start, stop, list_instances, create_instance, destroy_instance, flow_start, flow_stop, flow_list, flow_replay. ' +
       'Multi-instance: pass `instance` to target an isolated VM; omit it to use the calling Agent\'s ' +
       'assigned instance (first Agent gets the default VM, later Agents get isolated instances). ' +
       'Use shell for low-level Android commands, logcat for logs, ' +
@@ -2211,7 +2382,7 @@ export function apply(ctx, config = {}) {
       properties: {
         action: {
           type: 'string',
-          description: 'info|shell|logcat|getprop|setprop|packages|install|push|pull|reboot|root|force_stop|clear_data|uninstall|rotate|ui_dump|record|perf|screenshot|tap|swipe|long_press|key|text|apk_info|find_ui|assert_text|tap_text|clipboard_get|clipboard_set|devices|attach_device|detach_device|start|stop|list_instances|create_instance|destroy_instance',
+          description: 'info|shell|logcat|getprop|setprop|packages|install|push|pull|reboot|root|force_stop|clear_data|uninstall|rotate|ui_dump|inspect_ui|proxy|install_ca|record|perf|screenshot|tap|swipe|long_press|key|text|apk_info|find_ui|assert_text|tap_text|clipboard_get|clipboard_set|devices|attach_device|detach_device|start|stop|list_instances|create_instance|destroy_instance|flow_start|flow_stop|flow_list|flow_replay',
         },
         instance: { type: 'string', description: 'Target VM instance id (default or an extra instance from list_instances). Omit for the calling Agent\'s assigned instance.' },
         instanceName: { type: 'string', description: 'create_instance: optional name for the new isolated instance.' },
@@ -2243,6 +2414,10 @@ export function apply(ctx, config = {}) {
         className: { type: 'string', description: 'find_ui: substring of the Android class name.' },
         paste: { type: 'boolean', description: 'clipboard_set: also paste immediately (scrcpy paste flag).' },
         serial: { type: 'string', description: 'attach_device: adb serial of an online physical/remote device; detach_device ignores it.' },
+        host: { type: 'string', description: 'proxy: HTTP proxy host (the emulator host alias reaches the host machine).' },
+        port: { type: 'integer', description: 'proxy: HTTP proxy port (1-65535).' },
+        bypass: { type: 'string', description: 'proxy: optional no-proxy/exclusion list.' },
+        flowId: { type: 'string', description: 'flow_replay: saved flow id from flow_list.' },
       },
       required: ['action'],
     },
@@ -2346,6 +2521,29 @@ export function apply(ctx, config = {}) {
       }
 
       const api = await resolveToolApi(args, exec);
+      if (action === 'flow_list') {
+        return {
+          ok: true,
+          summary: `${(await flowRecorder.list(api.id)).length} saved flow(s) on ${api.id}`,
+          result: { instance: api.id, recording: flowRecorder.isRecording(api.id), flows: await flowRecorder.list(api.id) },
+        };
+      }
+      if (action === 'flow_start') {
+        const flow = flowRecorder.start(api.id, args.name);
+        return { ok: true, summary: `recording flow ${flow.name} (${flow.id}) on ${api.id}`, result: flow };
+      }
+      if (action === 'flow_stop') {
+        const flow = await flowRecorder.stop(api.id);
+        return { ok: true, summary: `saved flow ${flow.name} (${flow.id}, ${flow.events} events)`, result: flow };
+      }
+      if (action === 'flow_replay') {
+        if (!args.flowId) throw new Error('action=flow_replay requires flowId from flow_list');
+        await ensureToolApiReady(api, action);
+        const replayed = await flowRecorder.replay(args.flowId, async (payload) => api.input(payload), {
+          instanceId: api.id,
+        });
+        return { ok: true, summary: `replayed ${replayed.steps} step(s) from ${replayed.name}`, result: replayed };
+      }
       if (action === 'start') {
         const snapshot = await api.start();
         return { ok: true, summary: `started ${api.id}`, result: snapshot || {} };
@@ -2460,6 +2658,44 @@ export function apply(ctx, config = {}) {
         case 'ui_dump': {
           const result = await api.uiDump();
           return { ok: true, summary: `UI dump: ${result.nodes} nodes, ${result.bytes} bytes`, result };
+        }
+        case 'inspect_ui': {
+          const dump = await api.uiDump();
+          let screen = null;
+          try {
+            screen = await api.screenSize();
+          } catch {
+            screen = null;
+          }
+          const inspector = buildInspectorPayload(dump, screen);
+          const interactive = inspector.nodes.filter((node) => node.interactive);
+          return {
+            ok: true,
+            summary:
+              `${inspector.nodes.length} UI node(s), ${interactive.length} interactive; ` +
+              `screen ${screen ? `${screen.width}x${screen.height}` : '?'}`,
+            result: inspector,
+          };
+        }
+        case 'proxy': {
+          if (args.enabled === false || args.clear === true) {
+            const cleared = await api.setProxy({ enabled: false });
+            return { ok: true, summary: 'HTTP proxy cleared', result: cleared };
+          }
+          if (args.host !== undefined) {
+            const applied = await api.setProxy({ host: args.host, port: args.port, bypass: args.bypass, enabled: true });
+            return { ok: true, summary: `HTTP proxy set to ${applied.proxy}`, result: applied };
+          }
+          return { ok: true, summary: 'current HTTP proxy settings', result: await api.getProxy() };
+        }
+        case 'install_ca': {
+          if (!args.path) throw new Error('action=install_ca requires path to a .pem/.crt certificate');
+          const installed = await api.installCaCertificate(args.path);
+          return {
+            ok: true,
+            summary: `installed CA ${installed.fileName}${installed.systemCa ? ' (system+user)' : ' (user store)'}`,
+            result: installed,
+          };
         }
         case 'find_ui': {
           const dump = await api.uiDump();
