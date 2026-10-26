@@ -1,5 +1,5 @@
 /**
- * dsh-apk-vm — Host half.
+ * dsh-apk-vm 鈥?Host half.
  *
  * Mounts the APK Virtual Machine bridge behind the Web server:
  *   GET  /apk-vm/state    VM lifecycle snapshot (adb/emulator state, display size)
@@ -28,6 +28,7 @@ import { detectEnvironment, createAvd, installSystemImage, installSdkPackages, b
 import { acceptWebSocket } from './lib/ws.js';
 import { parseUiHierarchy, decorateUiNodes, buildInspectorPayload } from './lib/ui-inspector.js';
 import { FlowRecorder } from './lib/flows.js';
+import { collectStorage, cleanTempFiles, cleanSnapshots, cleanOrphanAvds, formatBytes } from './lib/storage.js';
 
 export const name = 'dsh-apk-vm';
 
@@ -298,7 +299,7 @@ export function apply(ctx, config = {}) {
   /* ---- H.264 video stream (scrcpy) ---------------------------------- *
    * The PNG screencap path is capped near 1-2 fps by adb. For real frame
    * rates the plugin runs the Apache-2.0 scrcpy server (vendored jar), parses
-   * its H.264 stream with lib/scrcpy.js, converts Annex-B → AVCC, and relays
+   * its H.264 stream with lib/scrcpy.js, converts Annex-B 鈫?AVCC, and relays
    * the packets over a no-dependency WebSocket (/apk-vm/ws) to the panel,
    * which decodes them with WebCodecs VideoDecoder. Input still goes through
    * the existing /apk-vm/input routes.                                    */
@@ -866,6 +867,75 @@ export function apply(ctx, config = {}) {
         if (!isReady(status)) throw new Error(`VM is not ready (state: ${status.state})`);
         return vm.input(payload);
       });
+    });
+
+    function storageSdkRoot() {
+      if (vm.sdkRoot) return vm.sdkRoot;
+      if (vm.adbPath) return path.dirname(path.dirname(vm.adbPath));
+      return process.env.ANDROID_HOME || process.env.ANDROID_SDK_ROOT || null;
+    }
+
+    register('/apk-vm/storage', async (req, res) => {
+      const known = () => {
+        const names = new Set();
+        if (vm.avdName) names.add(vm.avdName);
+        if (instanceManager) {
+          for (const item of instanceManager.list()) if (item.avdName) names.add(item.avdName);
+        }
+        return [...names];
+      };
+      const active = () => {
+        const names = new Set();
+        if (vm.avdName && ['ready', 'booting', 'starting'].includes(vm._state)) names.add(vm.avdName);
+        if (instanceManager) {
+          for (const item of instanceManager.list()) {
+            if (item.avdName && ['ready', 'booting', 'starting'].includes(item.state)) names.add(item.avdName);
+          }
+        }
+        return [...names];
+      };
+      if (req.method === 'GET') {
+        try {
+          sendJson(
+            res,
+            200,
+            await collectStorage({
+              sdkRoot: storageSdkRoot(),
+              avdRoot: undefined,
+              knownAvds: known(),
+              activeAvds: active(),
+            }),
+          );
+        } catch (error) {
+          sendError(res, 500, error.message);
+        }
+        return;
+      }
+      if (req.method !== 'POST') {
+        sendError(res, 405, 'GET or POST only');
+        return;
+      }
+      const body = await readJsonBody(req);
+      const action = String(body.action || '').toLowerCase();
+      try {
+        let result;
+        if (action === 'temp') {
+          result = await cleanTempFiles();
+        } else if (action === 'snapshots') {
+          if (body.confirm !== true) throw new Error('snapshot cleanup requires confirm:true');
+          const name = String(body.avdName || vm.avdName || 'dsh_apk');
+          if (active().includes(name)) throw new Error(`AVD ${name} is active; stop it before deleting snapshots`);
+          result = await cleanSnapshots({ avdName: name });
+        } else if (action === 'orphan-avds') {
+          if (body.confirm !== true) throw new Error('orphan AVD cleanup requires confirm:true');
+          result = await cleanOrphanAvds({ knownAvds: known(), activeAvds: active() });
+        } else {
+          throw new Error(`unsupported storage action: ${action || '(missing)'}`);
+        }
+        sendJson(res, 200, result);
+      } catch (error) {
+        sendError(res, 400, error.message);
+      }
     });
 
     register('/apk-vm/state', async (req, res) => {
@@ -2369,7 +2439,7 @@ export function apply(ctx, config = {}) {
       'The VM is usually already running (warm start); adbd runs as root once ready. ' +
       'Actions: info, shell, logcat, getprop, setprop, packages, install, push, pull, reboot, root, ' +
       'force_stop, clear_data, uninstall, rotate, ui_dump, inspect_ui, proxy, install_ca, record, perf, screenshot, tap, swipe, long_press, key, text, ' +
-      'apk_info, find_ui, assert_text, tap_text, clipboard_get, clipboard_set, devices, attach_device, detach_device, start, stop, list_instances, create_instance, destroy_instance, flow_start, flow_stop, flow_list, flow_replay. ' +
+      'apk_info, find_ui, assert_text, tap_text, clipboard_get, clipboard_set, devices, attach_device, detach_device, start, stop, list_instances, create_instance, destroy_instance, flow_start, flow_stop, flow_list, flow_replay, storage, clean_storage. ' +
       'Multi-instance: pass `instance` to target an isolated VM; omit it to use the calling Agent\'s ' +
       'assigned instance (first Agent gets the default VM, later Agents get isolated instances). ' +
       'Use shell for low-level Android commands, logcat for logs, ' +
@@ -2382,7 +2452,7 @@ export function apply(ctx, config = {}) {
       properties: {
         action: {
           type: 'string',
-          description: 'info|shell|logcat|getprop|setprop|packages|install|push|pull|reboot|root|force_stop|clear_data|uninstall|rotate|ui_dump|inspect_ui|proxy|install_ca|record|perf|screenshot|tap|swipe|long_press|key|text|apk_info|find_ui|assert_text|tap_text|clipboard_get|clipboard_set|devices|attach_device|detach_device|start|stop|list_instances|create_instance|destroy_instance|flow_start|flow_stop|flow_list|flow_replay',
+          description: 'info|shell|logcat|getprop|setprop|packages|install|push|pull|reboot|root|force_stop|clear_data|uninstall|rotate|ui_dump|inspect_ui|proxy|install_ca|record|perf|screenshot|tap|swipe|long_press|key|text|apk_info|find_ui|assert_text|tap_text|clipboard_get|clipboard_set|devices|attach_device|detach_device|start|stop|list_instances|create_instance|destroy_instance|flow_start|flow_stop|flow_list|flow_replay|storage|clean_storage',
         },
         instance: { type: 'string', description: 'Target VM instance id (default or an extra instance from list_instances). Omit for the calling Agent\'s assigned instance.' },
         instanceName: { type: 'string', description: 'create_instance: optional name for the new isolated instance.' },
@@ -2418,6 +2488,9 @@ export function apply(ctx, config = {}) {
         port: { type: 'integer', description: 'proxy: HTTP proxy port (1-65535).' },
         bypass: { type: 'string', description: 'proxy: optional no-proxy/exclusion list.' },
         flowId: { type: 'string', description: 'flow_replay: saved flow id from flow_list.' },
+        storageAction: { type: 'string', description: 'clean_storage: temp|snapshots|orphan-avds.' },
+        avdName: { type: 'string', description: 'clean_storage snapshots: target AVD (defaults to the active AVD).' },
+        confirm: { type: 'boolean', description: 'clean_storage: required true for snapshot or orphan AVD deletion.' },
       },
       required: ['action'],
     },
@@ -2543,6 +2616,65 @@ export function apply(ctx, config = {}) {
           instanceId: api.id,
         });
         return { ok: true, summary: `replayed ${replayed.steps} step(s) from ${replayed.name}`, result: replayed };
+      }
+      if (action === 'storage') {
+        const report = await collectStorage({
+          sdkRoot: storageSdkRoot(),
+          knownAvds: [
+            vm.avdName,
+            ...(instanceManager ? instanceManager.list().map((item) => item.avdName) : []),
+          ].filter(Boolean),
+          activeAvds: [
+            ...(['ready', 'booting', 'starting'].includes(vm._state) ? [vm.avdName] : []),
+            ...(instanceManager
+              ? instanceManager
+                  .list()
+                  .filter((item) => ['ready', 'booting', 'starting'].includes(item.state))
+                  .map((item) => item.avdName)
+              : []),
+          ].filter(Boolean),
+        });
+        return {
+          ok: true,
+          summary:
+            `AVD ${formatBytes(report.totals.avdBytes)}, snapshots ` +
+            `${formatBytes(report.totals.snapshotBytes)}, SDK ${formatBytes(report.totals.sdkBytes)}, ` +
+            `temp ${formatBytes(report.totals.tempBytes)}, free ${formatBytes(report.totals.freeBytes)}`,
+          result: report,
+        };
+      }
+      if (action === 'clean_storage') {
+        if (!args.storageAction) throw new Error('action=clean_storage requires storageAction');
+        const storageAction = String(args.storageAction).toLowerCase();
+        const knownAvds = [
+          vm.avdName,
+          ...(instanceManager ? instanceManager.list().map((item) => item.avdName) : []),
+        ].filter(Boolean);
+        const activeAvds = [
+          ...(['ready', 'booting', 'starting'].includes(vm._state) ? [vm.avdName] : []),
+          ...(instanceManager
+            ? instanceManager
+                .list()
+                .filter((item) => ['ready', 'booting', 'starting'].includes(item.state))
+                .map((item) => item.avdName)
+            : []),
+        ].filter(Boolean);
+        let result;
+        if (storageAction === 'temp') result = await cleanTempFiles();
+        else if (storageAction === 'snapshots') {
+          if (args.confirm !== true) throw new Error('clean_storage snapshots requires confirm=true');
+          const target = String(args.avdName || vm.avdName || 'dsh_apk');
+          if (activeAvds.includes(target)) throw new Error(`AVD ${target} is active; stop it first`);
+          result = await cleanSnapshots({ avdName: target });
+        } else if (storageAction === 'orphan-avds') {
+          if (args.confirm !== true) throw new Error('clean_storage orphan-avds requires confirm=true');
+          result = await cleanOrphanAvds({ knownAvds, activeAvds });
+        } else throw new Error(`unsupported storageAction: ${storageAction}`);
+        return {
+          ok: true,
+          summary: `${storageAction}: freed ${formatBytes(result.freedBytes)}`,
+          result,
+        };
       }
       if (action === 'start') {
         const snapshot = await api.start();
@@ -2766,3 +2898,4 @@ export function apply(ctx, config = {}) {
     }, 'dsh-apk-vm: apk_vm tool');
   });
 }
+

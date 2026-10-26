@@ -24,7 +24,7 @@ same-origin, loopback-only debug HTTP API and an `apk_vm` Agent tool.
 > 当前 **Windows x64 与 Linux x86_64（headless）为端到端已验证平台**；macOS 仅做探测/CI
 > 覆盖，详见 `docs/LINUX-E2E.md`。
 
-**Status:** `0.4.1` · Apache-2.0 · no npm runtime dependencies · no build step.
+**Status:** `0.5.0` · Apache-2.0 · no npm runtime dependencies · no build step.
 
 This is an open-source DSH plugin published on npm as **`dsh-apk-vm`**. Repository:
 [github.com/yuxiaole-bili/dsh-apk-vm](https://github.com/yuxiaole-bili/dsh-apk-vm).
@@ -174,6 +174,10 @@ key {"text":"HOME"}       -> returned to launcher
   (`settings put global http_proxy`) and installs a local `.pem`/`.crt` CA into the rooted
   Android user CA store with the correct OpenSSL subject-hash filename; the system CA store is
   updated when the guest allows a remount.
+- **Storage panel + guarded cleanup.** A Storage card reports the AVD, snapshot, SDK, temp-file
+  and free-disk footprint and offers explicit cleanups: plugin temp files, quick-boot
+  snapshots for a stopped AVD, and orphan `dsh_apk_*` AVDs. Destructive actions need a second
+  click and never touch the active VM.
 - **Installed-app management.** The panel's **Installed apps** card lists third-party packages
   for the active instance and offers force-stop, clear-data and uninstall; it uses the same
   rooted `debug/packages` + `debug/action` API as the Agent tool.
@@ -236,6 +240,28 @@ key {"text":"HOME"}       -> returned to launcher
 - `POST /apk-vm/debug/proxy` sets the guest HTTP proxy; `DELETE` clears it.
 - `POST /apk-vm/debug/ca` accepts a host `.pem`/`.crt` path and installs it under the guest's
   user CA directory with the correct subject hash.
+
+## Storage management
+
+`GET /apk-vm/storage` reports the logical size of every AVD, its quick-boot snapshots, the
+Android SDK, plugin temp files and the free space on the AVD volume. The panel's **Storage**
+card uses the same endpoint.
+
+`POST /apk-vm/storage` accepts:
+
+```json
+{ "action": "temp" }
+{ "action": "snapshots", "avdName": "dsh_apk", "confirm": true }
+{ "action": "orphan-avds", "confirm": true }
+```
+
+- `temp` removes only screenshots, MP4 recordings, uploaded APKs and flow JSON created by this
+  plugin.
+- `snapshots` deletes the quick-boot snapshots of a **stopped** plugin-managed AVD; the next
+  boot is a cold boot.
+- `orphan-avds` removes only `dsh_apk_*` AVDs that are not registered to any instance and are
+  not active.
+- `apk_vm` tool actions: `storage`, `clean_storage` (`storageAction`, `avdName`, `confirm`).
 
 ## Reproducible demo
 

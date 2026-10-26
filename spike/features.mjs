@@ -14,6 +14,7 @@ import { parseUiHierarchy, decorateUiNodes, buildInspectorPayload, selectorForNo
 import { FlowRecorder } from '../lib/flows.js';
 import { extractApkBundle, cleanupBundle, listZipEntries } from '../lib/apk-bundle.js';
 import { inspectCertificate, subjectHashOld } from '../lib/x509.js';
+import { collectStorage, cleanTempFiles, cleanOrphanAvds } from '../lib/storage.js';
 
 const SPIKE_DIR = path.dirname(fileURLToPath(import.meta.url));
 const SAMPLE_APK = path.join(SPIKE_DIR, 'android', 'sample.apk');
@@ -169,6 +170,43 @@ await check('X.509 subject_hash_old matches OpenSSL for the test CA', async () =
   assert.equal(cert.fileName, '73393196.0');
   assert.equal(subjectHashOld(cert.der), '73393196');
   assert.match(cert.subject, /dsh-apk-vm-test-ca/);
+});
+
+await check('Storage reports AVDs/temp and cleans only plugin artifacts', async () => {
+  const root = await fsp.mkdtemp(path.join(os.tmpdir(), 'dsh-storage-test-'));
+  const avdRoot = path.join(root, 'avd');
+  const tempRoot = path.join(root, 'tmp');
+  try {
+    await fsp.mkdir(path.join(avdRoot, 'dsh_apk.avd', 'snapshots', 'default_boot'), { recursive: true });
+    await fsp.mkdir(path.join(avdRoot, 'dsh_apk_orphan.avd'), { recursive: true });
+    await fsp.writeFile(path.join(avdRoot, 'dsh_apk.avd', 'userdata.img'), Buffer.alloc(1024));
+    await fsp.writeFile(path.join(avdRoot, 'dsh_apk.avd', 'snapshots', 'default_boot', 'ram.bin'), Buffer.alloc(2048));
+    await fsp.writeFile(path.join(avdRoot, 'dsh_apk.avd.ini'), `path=${path.join(avdRoot, 'dsh_apk.avd')}\n`);
+    await fsp.writeFile(path.join(avdRoot, 'dsh_apk_orphan.avd.ini'), `path=${path.join(avdRoot, 'dsh_apk_orphan.avd')}\n`);
+    await fsp.mkdir(path.join(tempRoot, 'dsh-apk-vm-uploads'), { recursive: true });
+    await fsp.writeFile(path.join(tempRoot, 'dsh-apk-vm-uploads', 'a.apk'), Buffer.alloc(512));
+    await fsp.writeFile(path.join(tempRoot, 'apk-vm-shot-test.png'), Buffer.alloc(128));
+    await fsp.writeFile(path.join(tempRoot, 'user-file.txt'), 'keep me');
+
+    const report = await collectStorage({ avdRoot, tempRoot, knownAvds: ['dsh_apk'], activeAvds: ['dsh_apk'] });
+    assert.equal(report.avds.length, 2);
+    const base = report.avds.find((item) => item.name === 'dsh_apk');
+    assert.equal(base.totalBytes, 3072);
+    assert.equal(base.snapshotBytes, 2048);
+    assert.equal(base.orphan, false);
+    assert.equal(report.temp.uploadsBytes, 512);
+    assert.equal(report.totals.tempBytes, 640);
+
+    const cleaned = await cleanOrphanAvds({ avdRoot, knownAvds: ['dsh_apk'], activeAvds: ['dsh_apk'] });
+    assert.equal(cleaned.removed.length, 1);
+    assert.equal(await fsp.stat(path.join(avdRoot, 'dsh_apk_orphan.avd')).catch(() => null), null);
+
+    const tempClean = await cleanTempFiles({ tempRoot });
+    assert.equal(tempClean.freedBytes, 640);
+    assert.equal(await fsp.stat(path.join(tempRoot, 'user-file.txt')).then(() => true), true);
+  } finally {
+    await fsp.rm(root, { recursive: true, force: true });
+  }
 });
 
 console.log(`\n--- summary ---\nchecks: ${checks}, failed: ${failed}`);

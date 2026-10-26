@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.5.0
+
+Storage management.
+
+### Added
+
+- Storage panel: AVD / snapshot / SDK / plugin temp / free-disk footprint, with guarded
+  cleanup actions (two-click confirmation for destructive actions).
+- `GET /apk-vm/storage` and `POST /apk-vm/storage` (`temp`, `snapshots`, `orphan-avds`).
+- `apk_vm` actions `storage` and `clean_storage`.
+- `lib/storage.js` with dependency-free size accounting and cleanup helpers; unit coverage for
+  temp cleanup, orphan AVD detection and snapshot-aware accounting.
+
+### Notes
+
+- Snapshot cleanup only targets a stopped plugin-managed AVD; the active VM is never deleted.
+- Orphan cleanup only matches `dsh_apk_*` AVDs that are not registered to an instance.
+
 ## 0.4.1
 
 Privacy cleanup for the published proof assets.

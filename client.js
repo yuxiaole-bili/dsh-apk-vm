@@ -200,6 +200,21 @@ window.__ModuleLoader__.load({
       'flow.saved': 'Saved {name}',
       'flow.done': 'Replayed {name}',
       'flow.count': '{n} step(s)',
+      'storage.title': 'Storage',
+      'storage.refresh': 'Refresh',
+      'storage.cleanTemp': 'Clean temp',
+      'storage.cleanSnapshots': 'Clean snapshots',
+      'storage.cleanOrphans': 'Clean orphan AVDs',
+      'storage.confirm': 'Click again to confirm',
+      'storage.freed': 'Freed {size}',
+      'storage.avds': '{size} AVDs',
+      'storage.snapshots': 'Snapshots',
+      'storage.sdk': 'SDK',
+      'storage.temp': 'Temp',
+      'storage.free': 'Free disk',
+      'storage.active': 'active',
+      'storage.orphan': 'orphan',
+      'storage.empty': 'No AVDs found',
       'apk.bundle': 'Bundle',
       'setup.title': 'Environment',
       'setup.ok': 'Ready',
@@ -398,6 +413,21 @@ window.__ModuleLoader__.load({
       'flow.saved': '已保存 {name}',
       'flow.done': '已回放 {name}',
       'flow.count': '{n} 步',
+      'storage.title': '存储',
+      'storage.refresh': '刷新',
+      'storage.cleanTemp': '清理临时文件',
+      'storage.cleanSnapshots': '清理快照',
+      'storage.cleanOrphans': '清理孤立 AVD',
+      'storage.confirm': '再点一次确认',
+      'storage.freed': '已释放 {size}',
+      'storage.avds': '{size} 个 AVD',
+      'storage.snapshots': '快照',
+      'storage.sdk': 'SDK',
+      'storage.temp': '临时文件',
+      'storage.free': '磁盘剩余',
+      'storage.active': '运行中',
+      'storage.orphan': '孤立',
+      'storage.empty': '没有找到 AVD',
       'apk.bundle': '安装包',
       'setup.title': '环境',
       'setup.ok': '就绪',
@@ -1207,6 +1237,19 @@ window.__ModuleLoader__.load({
         var flowBusy = flowBusyState[0];
         var setFlowBusy = flowBusyState[1];
 
+        var storageState = React.useState(null);
+        var storage = storageState[0];
+        var setStorage = storageState[1];
+        var storageBusyState = React.useState('');
+        var storageBusy = storageBusyState[0];
+        var setStorageBusy = storageBusyState[1];
+        var storageErrorState = React.useState('');
+        var storageError = storageErrorState[0];
+        var setStorageError = storageErrorState[1];
+        var storageConfirmState = React.useState('');
+        var storageConfirm = storageConfirmState[0];
+        var setStorageConfirm = storageConfirmState[1];
+
         var proxyState = React.useState({ host: '', port: '' });
         var proxy = proxyState[0];
         var setProxy = proxyState[1];
@@ -1392,6 +1435,7 @@ window.__ModuleLoader__.load({
           loadInstances();
           loadDevices();
           loadFlows();
+          loadStorage();
           var pollId = setInterval(function () {
             if (stateBusyRef.current) return;
             stateBusyRef.current = true;
@@ -2170,6 +2214,67 @@ window.__ModuleLoader__.load({
               return;
             }
             pushToast('success', T('network.installCa') + ': ' + (result.data && result.data.hash ? result.data.hash + '.0' : 'ok'));
+          });
+        }
+
+        function loadStorage() {
+          setStorageBusy('load');
+          setStorageError('');
+          return requestJson('/apk-vm/storage', null, T).then(function (result) {
+            if (!mountedRef.current) return result;
+            setStorageBusy('');
+            if (!result.ok) {
+              setStorageError(result.error || T('err.action'));
+              return result;
+            }
+            setStorage(isObject(result.data) ? result.data : null);
+            return result;
+          });
+        }
+
+        function storageSnapshotAvd() {
+          var list = storage && Array.isArray(storage.avds) ? storage.avds : [];
+          var current = snapshot && snapshot.vm && snapshot.vm.avd ? String(snapshot.vm.avd) : '';
+          var match = list.find(function (item) {
+            return item.name === current;
+          });
+          if (match) return match.name;
+          var active = list.find(function (item) {
+            return item.active && item.managed;
+          });
+          if (active) return active.name;
+          var managed = list.find(function (item) {
+            return item.managed;
+          });
+          return managed ? managed.name : 'dsh_apk';
+        }
+
+        function cleanStorage(action) {
+          if (storageBusy) return;
+          var destructive = action === 'snapshots' || action === 'orphan-avds';
+          if (destructive && storageConfirm !== action) {
+            setStorageConfirm(action);
+            pushToast('success', T('storage.confirm'));
+            return;
+          }
+          setStorageConfirm('');
+          setStorageBusy(action);
+          var payload = { action: action };
+          if (action === 'snapshots') {
+            payload.avdName = storageSnapshotAvd();
+            payload.confirm = true;
+          }
+          if (action === 'orphan-avds') payload.confirm = true;
+          requestJson('/apk-vm/storage', { method: 'POST', body: JSON.stringify(payload) }, T).then(function (result) {
+            if (!mountedRef.current) return;
+            setStorageBusy('');
+            if (!result.ok) {
+              pushToast('error', T('err.action') + ': ' + result.error);
+              return;
+            }
+            var freed = result.data && Number(result.data.freedBytes) ? Number(result.data.freedBytes) : 0;
+            pushToast('success', T('storage.freed', { size: formatBytes(freed) }));
+            loadStorage();
           });
         }
 
@@ -3814,6 +3919,124 @@ window.__ModuleLoader__.load({
           )
         );
 
+        var storageCard = h(
+          'details',
+          { className: 'apkvm-card apkvm-debug' },
+          h(
+            'summary',
+            { className: 'apkvm-debug-summary' },
+            h('span', { className: 'apkvm-card-title' }, T('storage.title')),
+            h(
+              'span',
+              { className: 'apkvm-dim', style: { marginLeft: 'auto' } },
+              storage ? formatBytes((storage.totals && storage.totals.avdBytes) || 0) : '…'
+            ),
+            h('span', { className: 'apkvm-chevron', 'aria-hidden': 'true' }, '▸')
+          ),
+          h(
+            'div',
+            { className: 'apkvm-debug-body' },
+            !storage
+              ? h('div', { className: 'apkvm-dim' }, storageError || T('storage.empty'))
+              : h(
+                  'div',
+                  { style: { display: 'flex', flexDirection: 'column', gap: '5px', minWidth: 0 } },
+                  h(
+                    'div',
+                    { className: 'apkvm-dim', style: { display: 'flex', flexWrap: 'wrap', gap: '8px' } },
+                    h('span', null, T('storage.avds', { size: (storage.avds || []).length }) + ': ' + formatBytes((storage.totals && storage.totals.avdBytes) || 0)),
+                    h('span', null, T('storage.snapshots') + ': ' + formatBytes((storage.totals && storage.totals.snapshotBytes) || 0)),
+                    h('span', null, T('storage.sdk') + ': ' + formatBytes((storage.totals && storage.totals.sdkBytes) || 0)),
+                    h('span', null, T('storage.temp') + ': ' + formatBytes((storage.totals && storage.totals.tempBytes) || 0)),
+                    storage.disk
+                      ? h('span', null, T('storage.free') + ': ' + formatBytes(storage.disk.freeBytes))
+                      : null
+                  ),
+                  (storage.avds || []).slice(0, 4).map(function (avd) {
+                    return h(
+                      'div',
+                      {
+                        key: 'storage-' + avd.name,
+                        className: 'apkvm-apk',
+                        style: { padding: '5px 7px', gap: '3px' },
+                      },
+                      h(
+                        'div',
+                        { style: { display: 'flex', alignItems: 'center', gap: '6px', minWidth: 0 } },
+                        h('span', { className: 'apkvm-apk-name', title: avd.path }, avd.name),
+                        avd.active ? h('span', { className: 'apkvm-tag ok' }, T('storage.active')) : null,
+                        avd.orphan ? h('span', { className: 'apkvm-tag' }, T('storage.orphan')) : null
+                      ),
+                      h(
+                        'div',
+                        { className: 'apkvm-dim' },
+                        formatBytes(avd.totalBytes || 0) +
+                          ' · ' +
+                          T('storage.snapshots') +
+                          ' ' +
+                          formatBytes(avd.snapshotBytes || 0)
+                      )
+                    );
+                  }),
+                  h(
+                    'div',
+                    { style: { display: 'flex', alignItems: 'center', gap: '5px', flexWrap: 'wrap' } },
+                    actionBtn(storageBusy === 'load' ? '…' : T('storage.refresh'), {
+                      key: 'storage-refresh',
+                      small: true,
+                      disabled: Boolean(storageBusy),
+                      onClick: loadStorage,
+                    }),
+                    actionBtn(storageBusy === 'temp' ? '…' : T('storage.cleanTemp'), {
+                      key: 'storage-temp',
+                      small: true,
+                      disabled: Boolean(storageBusy),
+                      onClick: function () {
+                        cleanStorage('temp');
+                      },
+                    }),
+                    actionBtn(
+                      storageConfirm === 'snapshots'
+                        ? T('storage.confirm')
+                        : storageBusy === 'snapshots'
+                          ? '…'
+                          : T('storage.cleanSnapshots'),
+                      {
+                        key: 'storage-snapshots',
+                        small: true,
+                        disabled: Boolean(storageBusy),
+                        onClick: function () {
+                          cleanStorage('snapshots');
+                        },
+                      }
+                    ),
+                    (storage.recommendations || []).some(function (item) {
+                      return item.code === 'orphan-avds';
+                    }) || (storage.avds || []).some(function (item) {
+                      return item.orphan;
+                    })
+                      ? actionBtn(
+                          storageConfirm === 'orphan-avds'
+                            ? T('storage.confirm')
+                            : storageBusy === 'orphan-avds'
+                              ? '…'
+                              : T('storage.cleanOrphans'),
+                          {
+                            key: 'storage-orphans',
+                            small: true,
+                            disabled: Boolean(storageBusy),
+                            onClick: function () {
+                              cleanStorage('orphan-avds');
+                            },
+                          }
+                        )
+                      : null
+                  ),
+                  storageError ? h('div', { className: 'apkvm-dim' }, storageError) : null
+                )
+          )
+        );
+
         var primaryAction =
           ready || busyState
             ? actionBtn(vmBusy ? T('action.stopping') : T('action.stop'), {
@@ -4149,6 +4372,7 @@ window.__ModuleLoader__.load({
               debugCard,
               flowCard,
               networkCard,
+              storageCard,
               appsCard,
               diagCard,
               h('div', { className: 'apkvm-footnote', title: T('hint.boot') }, T('hint.short')),
