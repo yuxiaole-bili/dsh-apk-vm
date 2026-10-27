@@ -24,7 +24,7 @@ same-origin, loopback-only debug HTTP API and an `apk_vm` Agent tool.
 > 当前 **Windows x64 与 Linux x86_64（headless）为端到端已验证平台**；macOS 仅做探测/CI
 > 覆盖，详见 `docs/LINUX-E2E.md`。
 
-**Status:** `0.6.0` · Apache-2.0 · no npm runtime dependencies · no build step.
+**Status:** `0.6.1` · Apache-2.0 · no npm runtime dependencies · no build step.
 
 This is an open-source DSH plugin published on npm as **`dsh-apk-vm`**. Repository:
 [github.com/yuxiaole-bili/dsh-apk-vm](https://github.com/yuxiaole-bili/dsh-apk-vm).

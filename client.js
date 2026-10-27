@@ -205,6 +205,7 @@ window.__ModuleLoader__.load({
       'network.testOk': 'Connectivity OK',
       'network.testFail': 'Connectivity check failed',
       'network.pcap': 'Download pcap',
+      'network.pcapPath': 'Host pcap path (.pcap, next start)',
       'network.restartRequired': 'Restart the VM to apply custom DNS',
       'network.sharedHint': 'Shared forwards are reachable from other VMs through the emulator host alias.',
       'network.guestUrl': 'Guest URL: {url}',
@@ -437,6 +438,7 @@ window.__ModuleLoader__.load({
       'network.testOk': '连通性正常',
       'network.testFail': '连通性检查失败',
       'network.pcap': '下载 pcap',
+      'network.pcapPath': '宿主机 pcap 路径（.pcap，下次启动）',
       'network.restartRequired': '重启虚拟机后生效自定义 DNS',
       'network.sharedHint': '共享转发可被其他 VM 通过模拟器宿主别名访问。',
       'network.guestUrl': 'Guest URL: {url}',
@@ -1318,6 +1320,9 @@ window.__ModuleLoader__.load({
         var hostsTextState = React.useState('');
         var hostsText = hostsTextState[0];
         var setHostsText = hostsTextState[1];
+        var pcapPathState = React.useState('');
+        var pcapPath = pcapPathState[0];
+        var setPcapPath = pcapPathState[1];
 
         var actualFpsState = React.useState(0);
         var actualFps = actualFpsState[0];
@@ -4216,6 +4221,18 @@ window.__ModuleLoader__.load({
               },
               'aria-label': T('network.hosts'),
             }),
+            h('input', {
+              className: 'apkvm-input',
+              type: 'text',
+              value: pcapPath,
+              placeholder: T('network.pcapPath'),
+              spellCheck: false,
+              disabled: Boolean(networkBusy),
+              onChange: function (event) {
+                setPcapPath(event && event.target ? String(event.target.value) : '');
+              },
+              'aria-label': T('network.pcapPath'),
+            }),
             h(
               'div',
               { style: { display: 'flex', alignItems: 'center', gap: '5px', flexWrap: 'wrap' } },
@@ -4224,6 +4241,14 @@ window.__ModuleLoader__.load({
                 small: true,
                 disabled: !ready || Boolean(networkBusy),
                 onClick: applyHosts,
+              }),
+              actionBtn('pcap', {
+                key: 'pcap-apply',
+                small: true,
+                disabled: !ready || Boolean(networkBusy) || !pcapPath.trim(),
+                onClick: function () {
+                  networkAction('pcap', { path: pcapPath.trim() });
+                },
               }),
               network && network.pcap && network.pcap.enabled
                 ? h(

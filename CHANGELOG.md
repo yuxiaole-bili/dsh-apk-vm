@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.6.1
+
+Network panel completeness.
+
+### Added
+
+- Network card pcap path input and apply action (capture starts on the next emulator start).
+- `setTcpdumpPath` API/tool wiring for per-instance pcap configuration.
+
+### Fixed
+
+- Clearing the hosts list now unmounts the `/etc/hosts` bind mount instead of leaving the last
+  entries active until reboot.
+
 ## 0.6.0
 
 Network controls.
