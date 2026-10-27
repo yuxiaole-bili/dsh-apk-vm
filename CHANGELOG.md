@@ -1,5 +1,31 @@
 # Changelog
 
+## 0.6.0
+
+Network controls.
+
+### Added
+
+- Port forwarding management (`forward-add` / `forward-remove`) over adb, with a host-port →
+  guest-port list and optional `shared` rules.
+- Custom DNS servers via the emulator `-dns-server` launch flag (restart required) and guest
+  `/etc/hosts` injection through a root bind mount, reapplied after boot.
+- Proxy connectivity test from inside the guest (`ping` + toybox `nc`), and current proxy
+  display in the Network card.
+- Per-instance network mode:
+  - `isolated` (default QEMU-NAT isolation)
+  - `shared` (host-mediated TCP sharing through shared port forwards)
+- Optional emulator pcap capture (`-tcpdump`) with `GET /apk-vm/network/pcap` download.
+- Network card UI for forwards, DNS, hosts, mode, test, and pcap; `apk_vm` action `network`.
+- Per-instance network route: `/apk-vm/instances/<id>/network`.
+
+### Notes
+
+- Shared mode is host-mediated TCP sharing, not L2 bridging; instances keep their own QEMU NAT.
+- DNS changes take effect on the next emulator start; hosts changes apply live and survive a
+  restart while the plugin keeps the configured entries.
+- pcap export is opt-in and only writes traffic from the emulator's user-mode network.
+
 ## 0.5.0
 
 Storage management.

@@ -189,6 +189,25 @@ window.__ModuleLoader__.load({
       'network.caPath': 'CA certificate path (.pem/.crt)',
       'network.installCa': 'Install CA',
       'network.current': 'Current: {value}',
+      'network.forwards': 'Port forwards',
+      'network.forwardLocal': 'Host port',
+      'network.forwardRemote': 'Guest port',
+      'network.addForward': 'Add forward',
+      'network.remove': 'Remove',
+      'network.mode': 'Mode',
+      'network.isolated': 'Isolated',
+      'network.shared': 'Shared (host bridge)',
+      'network.dns': 'DNS servers',
+      'network.applyDns': 'Apply DNS',
+      'network.hosts': 'Hosts entries',
+      'network.applyHosts': 'Apply hosts',
+      'network.test': 'Test connectivity',
+      'network.testOk': 'Connectivity OK',
+      'network.testFail': 'Connectivity check failed',
+      'network.pcap': 'Download pcap',
+      'network.restartRequired': 'Restart the VM to apply custom DNS',
+      'network.sharedHint': 'Shared forwards are reachable from other VMs through the emulator host alias.',
+      'network.guestUrl': 'Guest URL: {url}',
       'flow.title': 'Flow recorder',
       'flow.start': 'Record',
       'flow.stop': 'Stop',
@@ -402,6 +421,25 @@ window.__ModuleLoader__.load({
       'network.caPath': 'CA 证书路径（.pem/.crt）',
       'network.installCa': '安装 CA',
       'network.current': '当前：{value}',
+      'network.forwards': '端口转发',
+      'network.forwardLocal': '宿主机端口',
+      'network.forwardRemote': 'Guest 端口',
+      'network.addForward': '添加转发',
+      'network.remove': '删除',
+      'network.mode': '模式',
+      'network.isolated': '隔离',
+      'network.shared': '共享（宿主桥接）',
+      'network.dns': 'DNS 服务器',
+      'network.applyDns': '应用 DNS',
+      'network.hosts': 'Hosts 条目',
+      'network.applyHosts': '应用 Hosts',
+      'network.test': '测试连通性',
+      'network.testOk': '连通性正常',
+      'network.testFail': '连通性检查失败',
+      'network.pcap': '下载 pcap',
+      'network.restartRequired': '重启虚拟机后生效自定义 DNS',
+      'network.sharedHint': '共享转发可被其他 VM 通过模拟器宿主别名访问。',
+      'network.guestUrl': 'Guest URL: {url}',
       'flow.title': '操作录制',
       'flow.start': '录制',
       'flow.stop': '停止',
@@ -1259,6 +1297,27 @@ window.__ModuleLoader__.load({
         var caPathState = React.useState('');
         var caPath = caPathState[0];
         var setCaPath = caPathState[1];
+        var networkState = React.useState(null);
+        var network = networkState[0];
+        var setNetwork = networkState[1];
+        var networkBusyState = React.useState('');
+        var networkBusy = networkBusyState[0];
+        var setNetworkBusy = networkBusyState[1];
+        var forwardLocalState = React.useState('');
+        var forwardLocal = forwardLocalState[0];
+        var setForwardLocal = forwardLocalState[1];
+        var forwardRemoteState = React.useState('');
+        var forwardRemote = forwardRemoteState[0];
+        var setForwardRemote = forwardRemoteState[1];
+        var forwardSharedState = React.useState(false);
+        var forwardShared = forwardSharedState[0];
+        var setForwardShared = forwardSharedState[1];
+        var dnsTextState = React.useState('');
+        var dnsText = dnsTextState[0];
+        var setDnsText = dnsTextState[1];
+        var hostsTextState = React.useState('');
+        var hostsText = hostsTextState[0];
+        var setHostsText = hostsTextState[1];
 
         var actualFpsState = React.useState(0);
         var actualFps = actualFpsState[0];
@@ -1436,6 +1495,7 @@ window.__ModuleLoader__.load({
           loadDevices();
           loadFlows();
           loadStorage();
+          loadNetwork();
           var pollId = setInterval(function () {
             if (stateBusyRef.current) return;
             stateBusyRef.current = true;
@@ -1456,6 +1516,12 @@ window.__ModuleLoader__.load({
             }
           };
         }, []);
+
+        // Load network details once the VM becomes ready (the first render often
+        // happens while the state is still loading).
+        React.useEffect(function () {
+          if (ready) loadNetwork();
+        }, [ready, activeInstance]);
 
         // Track document visibility so the frame stream pauses when hidden.
         React.useEffect(function () {
@@ -1833,6 +1899,8 @@ window.__ModuleLoader__.load({
           setInspectNodes([]);
           setInspectSelected(null);
           loadFlows();
+          setNetwork(null);
+          loadNetwork();
           stopLiveLogcat();
           frameStatsRef.current = [];
           loadState();
@@ -2166,6 +2234,98 @@ window.__ModuleLoader__.load({
           });
         }
 
+        function loadNetwork() {
+          if (!ready) return Promise.resolve(null);
+          setNetworkBusy('load');
+          return requestJson(instancePath('/network'), null, T).then(function (result) {
+            if (!mountedRef.current) return result;
+            setNetworkBusy('');
+            if (result.ok && isObject(result.data)) {
+              setNetwork(result.data);
+              if (result.data.proxy && typeof result.data.proxy === 'string') {
+                var colon = result.data.proxy.lastIndexOf(':');
+                if (colon > 0) {
+                  setProxy({ host: result.data.proxy.slice(0, colon), port: result.data.proxy.slice(colon + 1) });
+                }
+              }
+              if (result.data.dnsServers && result.data.dnsServers.length) {
+                setDnsText(result.data.dnsServers.join(', '));
+              }
+            }
+            return result;
+          });
+        }
+
+        function networkAction(action, payload) {
+          if (networkBusy) return;
+          setNetworkBusy(action);
+          return requestJson(
+            instancePath('/network'),
+            { method: 'POST', body: JSON.stringify(Object.assign({ action: action }, payload || {})) },
+            T
+          ).then(function (result) {
+            if (!mountedRef.current) return result;
+            setNetworkBusy('');
+            if (!result.ok) {
+              pushToast('error', T('err.action') + ': ' + result.error);
+              return result;
+            }
+            if (action === 'test') {
+              pushToast(result.data && result.data.ok === true ? 'success' : 'error', T(result.data && result.data.ok ? 'network.testOk' : 'network.testFail'));
+            } else if (action === 'dns' && result.data && result.data.restartRequired) {
+              pushToast('success', T('network.restartRequired'));
+            } else {
+              pushToast('success', T('network.title'));
+            }
+            loadNetwork();
+            return result;
+          });
+        }
+
+        function addPortForward() {
+          var local = Number(forwardLocal);
+          var remote = Number(forwardRemote);
+          if (!Number.isInteger(local) || local < 1 || local > 65535 || !Number.isInteger(remote) || remote < 1 || remote > 65535) {
+            pushToast('error', T('err.action'));
+            return;
+          }
+          networkAction('forward-add', {
+            localPort: local,
+            remotePort: remote,
+            shared: forwardShared === true,
+          }).then(function (result) {
+            if (result && result.ok) {
+              setForwardLocal('');
+              setForwardRemote('');
+              setForwardShared(false);
+            }
+          });
+        }
+
+        function removePortForward(localPort) {
+          networkAction('forward-remove', { localPort: localPort });
+        }
+
+        function applyDns() {
+          var servers = String(dnsText || '')
+            .split(',')
+            .map(function (item) {
+              return item.trim();
+            })
+            .filter(Boolean);
+          networkAction('dns', { servers: servers });
+        }
+
+        function applyHosts() {
+          var entries = String(hostsText || '')
+            .split(/\r?\n/)
+            .map(function (line) {
+              return line.trim();
+            })
+            .filter(Boolean);
+          networkAction('hosts', { entries: entries });
+        }
+
         function applyProxy() {
           if (proxyBusy) return;
           setProxyBusy(true);
@@ -2181,6 +2341,7 @@ window.__ModuleLoader__.load({
               return;
             }
             pushToast('success', T('network.current', { value: (result.data && result.data.proxy) || 'off' }));
+            loadNetwork();
           });
         }
 
@@ -2195,6 +2356,7 @@ window.__ModuleLoader__.load({
               return;
             }
             pushToast('success', T('network.clear'));
+            loadNetwork();
           });
         }
 
@@ -3915,7 +4077,167 @@ window.__ModuleLoader__.load({
                 onClick: installCa,
               })
             ),
-            h('div', { className: 'apkvm-dim' }, T('network.caPath'))
+            h('div', { className: 'apkvm-dim' }, T('network.caPath')),
+            h(
+              'label',
+              { style: { display: 'flex', alignItems: 'center', gap: '6px', fontSize: '11px', color: 'var(--dsw-alias-label-secondary)' } },
+              h('span', null, T('network.mode')),
+              h(
+                'select',
+                {
+                  value: (network && network.mode) || 'isolated',
+                  disabled: Boolean(networkBusy) || !ready,
+                  onChange: function (event) {
+                    networkAction('mode', { mode: event && event.target ? String(event.target.value) : 'isolated' });
+                  },
+                  style: {
+                    font: 'inherit',
+                    background: 'var(--dsw-alias-bg-layer-1)',
+                    color: 'var(--dsw-alias-label-primary)',
+                    border: '1px solid var(--dsw-alias-border-l2)',
+                    borderRadius: '6px',
+                    padding: '1px 4px',
+                  },
+                },
+                h('option', { value: 'isolated' }, T('network.isolated')),
+                h('option', { value: 'shared' }, T('network.shared'))
+              )
+            ),
+            h(
+              'div',
+              { style: { display: 'flex', alignItems: 'center', gap: '5px', flexWrap: 'wrap' } },
+              h('span', { className: 'apkvm-card-title' }, T('network.forwards')),
+              actionBtn(T('network.test'), {
+                key: 'network-test',
+                small: true,
+                disabled: !ready || Boolean(networkBusy),
+                onClick: function () {
+                  networkAction('test', { host: proxy.host || '', port: proxy.port || undefined });
+                },
+              })
+            ),
+            network && Array.isArray(network.forwards) && network.forwards.length
+              ? network.forwards.map(function (rule) {
+                  return h(
+                    'div',
+                    { key: 'forward-' + rule.localPort, className: 'apkvm-dim', style: { display: 'flex', alignItems: 'center', gap: '5px' } },
+                    h('span', { style: { flex: '1 1 auto' } }, 'tcp:' + rule.localPort + ' -> guest tcp:' + rule.remotePort),
+                    rule.shared ? h('span', { className: 'apkvm-tag ok' }, 'shared') : null,
+                    actionBtn(T('network.remove'), {
+                      key: 'forward-remove-' + rule.localPort,
+                      small: true,
+                      variant: 'danger',
+                      disabled: Boolean(networkBusy),
+                      onClick: function () {
+                        removePortForward(rule.localPort);
+                      },
+                    })
+                  );
+                })
+              : h('div', { className: 'apkvm-dim' }, T('network.forwards')),
+            h(
+              'div',
+              { style: { display: 'flex', alignItems: 'center', gap: '5px' } },
+              h('input', {
+                className: 'apkvm-input',
+                type: 'text',
+                value: forwardLocal,
+                placeholder: T('network.forwardLocal'),
+                spellCheck: false,
+                disabled: Boolean(networkBusy),
+                onChange: function (event) {
+                  setForwardLocal(event && event.target ? String(event.target.value) : '');
+                },
+                'aria-label': T('network.forwardLocal'),
+              }),
+              h('input', {
+                className: 'apkvm-input',
+                type: 'text',
+                value: forwardRemote,
+                placeholder: T('network.forwardRemote'),
+                spellCheck: false,
+                disabled: Boolean(networkBusy),
+                onChange: function (event) {
+                  setForwardRemote(event && event.target ? String(event.target.value) : '');
+                },
+                'aria-label': T('network.forwardRemote'),
+              }),
+              actionBtn(T('network.addForward'), {
+                key: 'forward-add',
+                small: true,
+                disabled: !ready || Boolean(networkBusy) || !forwardLocal.trim() || !forwardRemote.trim(),
+                onClick: addPortForward,
+              })
+            ),
+            h(
+              'label',
+              { style: { display: 'flex', alignItems: 'center', gap: '5px', fontSize: '11px', color: 'var(--dsw-alias-label-secondary)' } },
+              h('input', {
+                type: 'checkbox',
+                checked: forwardShared,
+                disabled: Boolean(networkBusy),
+                onChange: function (event) {
+                  setForwardShared(Boolean(event && event.target && event.target.checked));
+                },
+              }),
+              h('span', null, T('network.shared'))
+            ),
+            h(
+              'div',
+              { style: { display: 'flex', alignItems: 'center', gap: '5px' } },
+              h('input', {
+                className: 'apkvm-input',
+                type: 'text',
+                value: dnsText,
+                placeholder: T('network.dns'),
+                spellCheck: false,
+                disabled: Boolean(networkBusy),
+                onChange: function (event) {
+                  setDnsText(event && event.target ? String(event.target.value) : '');
+                },
+                'aria-label': T('network.dns'),
+              }),
+              actionBtn(T('network.applyDns'), {
+                key: 'dns-apply',
+                small: true,
+                disabled: !ready || Boolean(networkBusy),
+                onClick: applyDns,
+              })
+            ),
+            h('textarea', {
+              className: 'apkvm-input',
+              value: hostsText,
+              placeholder: T('network.hosts'),
+              spellCheck: false,
+              disabled: Boolean(networkBusy),
+              style: { minHeight: '46px', height: '46px', resize: 'vertical', padding: '4px 8px' },
+              onChange: function (event) {
+                setHostsText(event && event.target ? String(event.target.value) : '');
+              },
+              'aria-label': T('network.hosts'),
+            }),
+            h(
+              'div',
+              { style: { display: 'flex', alignItems: 'center', gap: '5px', flexWrap: 'wrap' } },
+              actionBtn(T('network.applyHosts'), {
+                key: 'hosts-apply',
+                small: true,
+                disabled: !ready || Boolean(networkBusy),
+                onClick: applyHosts,
+              }),
+              network && network.pcap && network.pcap.enabled
+                ? h(
+                    'a',
+                    {
+                      href: instancePath('/network/pcap'),
+                      download: 'capture.pcap',
+                      style: { fontSize: '11px', color: 'var(--dsw-alias-brand-primary)' },
+                    },
+                    T('network.pcap')
+                  )
+                : null
+            ),
+            network && network.mode === 'shared' ? h('div', { className: 'apkvm-dim' }, T('network.sharedHint')) : null
           )
         );
 

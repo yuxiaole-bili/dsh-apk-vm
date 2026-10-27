@@ -209,5 +209,17 @@ await check('Storage reports AVDs/temp and cleans only plugin artifacts', async 
   }
 });
 
+await check('Network config validates hosts/DNS/mode and pcap paths', async () => {
+  const { AndroidVm } = await import('../lib/android.js');
+  const vm = new AndroidVm();
+  assert.deepEqual(vm.normalizeHosts(['198.51.100.10\tapi.example.test']), ['198.51.100.10\tapi.example.test']);
+  assert.throws(() => vm.normalizeHosts(['not-an-ip api.test']), /invalid hosts IP/);
+  assert.equal(vm.setNetworkMode('shared').mode, 'shared');
+  assert.equal(vm.setNetworkMode('isolated').mode, 'isolated');
+  assert.throws(() => vm.setNetworkMode('bridge'), /isolated.*shared/);
+  assert.equal(vm.setTcpdumpPath('C:\\temp\\capture.pcap').enabled, true);
+  assert.throws(() => vm.setTcpdumpPath('C:\\temp\\capture.txt'), /\.pcap/);
+});
+
 console.log(`\n--- summary ---\nchecks: ${checks}, failed: ${failed}`);
 if (failed) process.exitCode = 1;

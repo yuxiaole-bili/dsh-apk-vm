@@ -245,6 +245,9 @@ export function apply(ctx, config = {}) {
     quickBoot: cfg.quickBoot !== false,
     snapshotName: cfg.snapshotName || undefined,
     saveSnapshotAfterBoot: cfg.saveSnapshotAfterBoot !== false,
+    dnsServers: Array.isArray(cfg.dnsServers) ? cfg.dnsServers.map(String) : undefined,
+    networkMode: cfg.networkMode || undefined,
+    tcpdumpPath: cfg.tcpdumpPath || undefined,
   });
 
   const instanceManager =
@@ -264,6 +267,9 @@ export function apply(ctx, config = {}) {
           scrcpyBitrate: cfg.scrcpyBitrate || 6_000_000,
           scrcpyMaxFps: cfg.scrcpyMaxFps || 60,
           idleTimeoutMs: cfg.instanceIdleMs || 15 * 60 * 1000,
+          dnsServers: Array.isArray(cfg.dnsServers) ? cfg.dnsServers.map(String) : undefined,
+          networkMode: cfg.networkMode || undefined,
+          tcpdumpPath: cfg.tcpdumpPath || undefined,
           log: (line) => vm._pushLog(line),
         });
 
@@ -1218,6 +1224,55 @@ export function apply(ctx, config = {}) {
         });
         return;
       }
+      if (rest === 'network') {
+        if (!(await ready())) return;
+        if (req.method === 'GET') {
+          sendJson(res, 200, await instance.vm.networkInfo());
+          return;
+        }
+        if (req.method !== 'POST') {
+          sendError(res, 405, 'GET or POST only');
+          return;
+        }
+        const body = await readJsonBody(req);
+        const action = String(body.action || '').toLowerCase();
+        try {
+          let result;
+          if (action === 'mode') result = instance.vm.setNetworkMode(body.mode);
+          else if (action === 'dns') result = await instance.vm.setDnsServers(body.servers);
+          else if (action === 'hosts') result = await instance.vm.setHosts(body.entries);
+          else if (action === 'test') result = await instance.vm.testNetwork(body);
+          else if (action === 'pcap') result = instance.vm.setTcpdumpPath(body.path);
+          else if (action === 'forward-add') result = await instance.vm.addPortForward(body.localPort, body.remotePort, { shared: body.shared === true });
+          else if (action === 'forward-remove') result = await instance.vm.removePortForward(body.localPort);
+          else throw new Error(`unsupported network action: ${action || '(missing)'}`);
+          sendJson(res, 200, result);
+        } catch (error) {
+          sendError(res, 400, error.message);
+        }
+        return;
+      }
+      if (rest === 'network/pcap') {
+        if (req.method !== 'GET' && req.method !== 'HEAD') {
+          sendError(res, 405, 'GET or HEAD only');
+          return;
+        }
+        const tcpdumpPath = instance.vm.tcpdumpPath;
+        if (!tcpdumpPath || !existsSync(tcpdumpPath)) {
+          sendError(res, 404, 'pcap capture is not configured or has no file yet');
+          return;
+        }
+        const stat = await fsp.stat(tcpdumpPath);
+        res.writeHead(200, {
+          'Content-Type': 'application/vnd.tcpdump.pcap',
+          'Content-Length': stat.size,
+          'Cache-Control': 'no-store',
+          'Content-Disposition': `attachment; filename="${path.basename(tcpdumpPath)}"`,
+        });
+        if (req.method === 'HEAD') res.end();
+        else createReadStream(tcpdumpPath).pipe(res);
+        return;
+      }
       if (rest === 'touch' && req.method === 'POST') {
         const body = await readJsonBody(req);
         const action = String(body.action || '').toLowerCase();
@@ -1452,6 +1507,8 @@ export function apply(ctx, config = {}) {
         'debug/pull',
         'debug/reboot',
         'flows',
+        'network',
+        'network/pcap',
       ];
       const disposers = [];
       for (const suffix of suffixes) {
@@ -2086,6 +2143,59 @@ export function apply(ctx, config = {}) {
       }
     });
 
+    register('/apk-vm/network', async (req, res) => {
+      if (req.method === 'GET') {
+        if (!(await ensureDebugReady(res))) return;
+        try {
+          sendJson(res, 200, await vm.networkInfo());
+        } catch (error) {
+          sendError(res, 400, error.message);
+        }
+        return;
+      }
+      if (req.method !== 'POST') {
+        sendError(res, 405, 'GET or POST only');
+        return;
+      }
+      if (!(await ensureDebugReady(res))) return;
+      const body = await readJsonBody(req);
+      const action = String(body.action || '').toLowerCase();
+      try {
+        let result;
+        if (action === 'mode') result = vm.setNetworkMode(body.mode);
+        else if (action === 'dns') result = await vm.setDnsServers(body.servers);
+        else if (action === 'hosts') result = await vm.setHosts(body.entries);
+        else if (action === 'test') result = await vm.testNetwork(body);
+        else if (action === 'pcap') result = vm.setTcpdumpPath(body.path);
+        else if (action === 'forward-add') result = await vm.addPortForward(body.localPort, body.remotePort, { shared: body.shared === true });
+        else if (action === 'forward-remove') result = await vm.removePortForward(body.localPort);
+        else throw new Error(`unsupported network action: ${action || '(missing)'}`);
+        sendJson(res, 200, result);
+      } catch (error) {
+        sendError(res, 400, error.message);
+      }
+    });
+
+    register('/apk-vm/network/pcap', async (req, res) => {
+      if (req.method !== 'GET' && req.method !== 'HEAD') {
+        sendError(res, 405, 'GET or HEAD only');
+        return;
+      }
+      if (!vm.tcpdumpPath || !existsSync(vm.tcpdumpPath)) {
+        sendError(res, 404, 'pcap capture is not configured or has no file yet');
+        return;
+      }
+      const stat = await fsp.stat(vm.tcpdumpPath);
+      res.writeHead(200, {
+        'Content-Type': 'application/vnd.tcpdump.pcap',
+        'Content-Length': stat.size,
+        'Cache-Control': 'no-store',
+        'Content-Disposition': `attachment; filename="${path.basename(vm.tcpdumpPath)}"`,
+      });
+      if (req.method === 'HEAD') res.end();
+      else createReadStream(vm.tcpdumpPath).pipe(res);
+    });
+
     register('/apk-vm/debug/record', async (req, res) => {
       if (req.method !== 'POST') {
         sendError(res, 405, 'POST only');
@@ -2293,6 +2403,14 @@ export function apply(ctx, config = {}) {
       getProxy: () => vm.getProxy(),
       setProxy: (options) => vm.setProxy(options),
       installCaCertificate: (certPath) => vm.installCaCertificate(certPath),
+      networkInfo: () => vm.networkInfo(),
+      setNetworkMode: (mode) => vm.setNetworkMode(mode),
+      setTcpdumpPath: (filePath) => vm.setTcpdumpPath(filePath),
+      setDnsServers: (servers) => vm.setDnsServers(servers),
+      setHosts: (entries) => vm.setHosts(entries),
+      testNetwork: (options) => vm.testNetwork(options),
+      addPortForward: (local, remote, options) => vm.addPortForward(local, remote, options),
+      removePortForward: (local) => vm.removePortForward(local),
       screenRecord: (options) => vm.screenRecord(options),
       perfSnapshot: () => vm.perfSnapshot(),
       screenshot: async () => {
@@ -2337,6 +2455,14 @@ export function apply(ctx, config = {}) {
       getProxy: () => instance.vm.getProxy(),
       setProxy: (options) => instance.vm.setProxy(options),
       installCaCertificate: (certPath) => instance.vm.installCaCertificate(certPath),
+      networkInfo: () => instance.vm.networkInfo(),
+      setNetworkMode: (mode) => instance.vm.setNetworkMode(mode),
+      setTcpdumpPath: (filePath) => instance.vm.setTcpdumpPath(filePath),
+      setDnsServers: (servers) => instance.vm.setDnsServers(servers),
+      setHosts: (entries) => instance.vm.setHosts(entries),
+      testNetwork: (options) => instance.vm.testNetwork(options),
+      addPortForward: (local, remote, options) => instance.vm.addPortForward(local, remote, options),
+      removePortForward: (local) => instance.vm.removePortForward(local),
       screenRecord: (options) => instance.screenRecord(options),
       perfSnapshot: () => instance.perfSnapshot(),
       screenshot: async () => {
@@ -2438,7 +2564,7 @@ export function apply(ctx, config = {}) {
       'Operate the local rooted Android APK virtual machine (Android emulator) that the APK VM panel manages. ' +
       'The VM is usually already running (warm start); adbd runs as root once ready. ' +
       'Actions: info, shell, logcat, getprop, setprop, packages, install, push, pull, reboot, root, ' +
-      'force_stop, clear_data, uninstall, rotate, ui_dump, inspect_ui, proxy, install_ca, record, perf, screenshot, tap, swipe, long_press, key, text, ' +
+      'force_stop, clear_data, uninstall, rotate, ui_dump, inspect_ui, proxy, install_ca, network, record, perf, screenshot, tap, swipe, long_press, key, text, ' +
       'apk_info, find_ui, assert_text, tap_text, clipboard_get, clipboard_set, devices, attach_device, detach_device, start, stop, list_instances, create_instance, destroy_instance, flow_start, flow_stop, flow_list, flow_replay, storage, clean_storage. ' +
       'Multi-instance: pass `instance` to target an isolated VM; omit it to use the calling Agent\'s ' +
       'assigned instance (first Agent gets the default VM, later Agents get isolated instances). ' +
@@ -2452,7 +2578,7 @@ export function apply(ctx, config = {}) {
       properties: {
         action: {
           type: 'string',
-          description: 'info|shell|logcat|getprop|setprop|packages|install|push|pull|reboot|root|force_stop|clear_data|uninstall|rotate|ui_dump|inspect_ui|proxy|install_ca|record|perf|screenshot|tap|swipe|long_press|key|text|apk_info|find_ui|assert_text|tap_text|clipboard_get|clipboard_set|devices|attach_device|detach_device|start|stop|list_instances|create_instance|destroy_instance|flow_start|flow_stop|flow_list|flow_replay|storage|clean_storage',
+          description: 'info|shell|logcat|getprop|setprop|packages|install|push|pull|reboot|root|force_stop|clear_data|uninstall|rotate|ui_dump|inspect_ui|proxy|install_ca|network|record|perf|screenshot|tap|swipe|long_press|key|text|apk_info|find_ui|assert_text|tap_text|clipboard_get|clipboard_set|devices|attach_device|detach_device|start|stop|list_instances|create_instance|destroy_instance|flow_start|flow_stop|flow_list|flow_replay|storage|clean_storage',
         },
         instance: { type: 'string', description: 'Target VM instance id (default or an extra instance from list_instances). Omit for the calling Agent\'s assigned instance.' },
         instanceName: { type: 'string', description: 'create_instance: optional name for the new isolated instance.' },
@@ -2491,6 +2617,16 @@ export function apply(ctx, config = {}) {
         storageAction: { type: 'string', description: 'clean_storage: temp|snapshots|orphan-avds.' },
         avdName: { type: 'string', description: 'clean_storage snapshots: target AVD (defaults to the active AVD).' },
         confirm: { type: 'boolean', description: 'clean_storage: required true for snapshot or orphan AVD deletion.' },
+        networkAction: { type: 'string', description: 'network: info|mode|dns|hosts|test|pcap|forward-add|forward-remove.' },
+        networkMode: { type: 'string', description: 'network mode: isolated|shared.' },
+        localPort: { type: 'integer', description: 'port forward: host loopback port.' },
+        remotePort: { type: 'integer', description: 'port forward: guest service port.' },
+        shared: { type: 'boolean', description: 'port forward: expose to other VMs through the emulator host alias (requires shared mode).' },
+        servers: { type: 'array', items: { type: 'string' }, description: 'network DNS: up to 4 IPv4/IPv6 DNS servers.' },
+        entries: { type: 'array', items: { type: 'string' }, description: 'network hosts: lines such as "1.2.3.4 api.example.com".' },
+        testHost: { type: 'string', description: 'network test: host to ping/TCP-test (default: emulator host alias).' },
+        testPort: { type: 'integer', description: 'network test: TCP port.' },
+        pcapPath: { type: 'string', description: 'network pcap: host path ending in .pcap; capture starts on the next emulator start.' },
       },
       required: ['action'],
     },
@@ -2675,6 +2811,50 @@ export function apply(ctx, config = {}) {
           summary: `${storageAction}: freed ${formatBytes(result.freedBytes)}`,
           result,
         };
+      }
+      if (action === 'network') {
+        const networkAction = String(args.networkAction || 'info').toLowerCase();
+        if (networkAction === 'mode') {
+          const result = api.setNetworkMode(args.networkMode || args.mode);
+          return { ok: true, summary: `network mode: ${result.mode}`, result };
+        }
+        if (networkAction === 'dns') {
+          const servers = Array.isArray(args.servers) ? args.servers : String(args.servers || '').split(',');
+          const result = await api.setDnsServers(servers);
+          return { ok: true, summary: `DNS: ${(result.servers || []).join(', ') || '(default)'}`, result };
+        }
+        if (networkAction === 'pcap') {
+          const result = api.setTcpdumpPath(args.pcapPath);
+          return { ok: true, summary: result.enabled ? `pcap -> ${result.path}` : 'pcap disabled', result };
+        }
+        await ensureToolApiReady(api, action);
+        if (networkAction === 'info') {
+          const result = await api.networkInfo();
+          return {
+            ok: true,
+            summary: `mode=${result.mode} proxy=${result.proxy || 'off'} forwards=${result.forwards.length} dns=${(result.dnsServers || []).join(',') || 'default'}`,
+            result,
+          };
+        }
+        if (networkAction === 'hosts') {
+          const result = await api.setHosts(Array.isArray(args.entries) ? args.entries : []);
+          return { ok: true, summary: `hosts applied: ${result.entries}`, result };
+        }
+        if (networkAction === 'test') {
+          const result = await api.testNetwork({ host: args.testHost, port: args.testPort });
+          return { ok: result.ok, summary: result.checks.map((item) => `${item.name}:${item.ok ? 'ok' : 'fail'}`).join(', '), result };
+        }
+        if (networkAction === 'forward-add') {
+          if (!args.localPort || !args.remotePort) throw new Error('forward-add requires localPort and remotePort');
+          const result = await api.addPortForward(args.localPort, args.remotePort, { shared: args.shared === true });
+          return { ok: true, summary: `forward tcp:${result.localPort} -> ${result.remotePort}`, result };
+        }
+        if (networkAction === 'forward-remove') {
+          if (!args.localPort) throw new Error('forward-remove requires localPort');
+          const result = await api.removePortForward(args.localPort);
+          return { ok: true, summary: `removed forward tcp:${result.localPort}`, result };
+        }
+        throw new Error(`unsupported networkAction: ${networkAction}`);
       }
       if (action === 'start') {
         const snapshot = await api.start();

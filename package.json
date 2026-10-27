@@ -1,6 +1,6 @@
 {
   "name": "dsh-apk-vm",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "type": "module",
   "description": "Local AOSP Android VM for DeepSeek Harness: preview rooted APKs at up to 60 fps, automate UIAutomator flows, and give each Agent an isolated VM.",
   "license": "Apache-2.0",

@@ -24,7 +24,7 @@ same-origin, loopback-only debug HTTP API and an `apk_vm` Agent tool.
 > 当前 **Windows x64 与 Linux x86_64（headless）为端到端已验证平台**；macOS 仅做探测/CI
 > 覆盖，详见 `docs/LINUX-E2E.md`。
 
-**Status:** `0.5.0` · Apache-2.0 · no npm runtime dependencies · no build step.
+**Status:** `0.6.0` · Apache-2.0 · no npm runtime dependencies · no build step.
 
 This is an open-source DSH plugin published on npm as **`dsh-apk-vm`**. Repository:
 [github.com/yuxiaole-bili/dsh-apk-vm](https://github.com/yuxiaole-bili/dsh-apk-vm).
@@ -170,10 +170,11 @@ key {"text":"HOME"}       -> returned to launcher
   then save the tap / swipe / key / text sequence as a JSON flow under the OS temp directory.
   Flows can be listed, replayed with their original relative timing, downloaded or deleted.
   Agents get `flow_start`, `flow_stop`, `flow_list` and `flow_replay`.
-- **Network debugging: proxy + CA.** The Network card sets/clears the guest global HTTP proxy
-  (`settings put global http_proxy`) and installs a local `.pem`/`.crt` CA into the rooted
-  Android user CA store with the correct OpenSSL subject-hash filename; the system CA store is
-  updated when the guest allows a remount.
+- **Network debugging and port forwarding.** The Network card manages host→guest port
+  forwards, custom DNS (next emulator start), guest `/etc/hosts` via a root bind mount,
+  HTTP proxy + CA installation, isolated/shared instance modes, and a guest-side connectivity
+  test. Optional pcap capture can be downloaded from the panel. See
+  [Network controls](#network-controls).
 - **Storage panel + guarded cleanup.** A Storage card reports the AVD, snapshot, SDK, temp-file
   and free-disk footprint and offers explicit cleanups: plugin temp files, quick-boot
   snapshots for a stopped AVD, and orphan `dsh_apk_*` AVDs. Destructive actions need a second
@@ -263,7 +264,30 @@ card uses the same endpoint.
   not active.
 - `apk_vm` tool actions: `storage`, `clean_storage` (`storageAction`, `avdName`, `confirm`).
 
-## Reproducible demo
+## Network controls
+
+`GET /apk-vm/network` returns the guest addresses, current proxy, DNS, hosts count, mode,
+port forwards and pcap status. `POST /apk-vm/network` accepts `action`:
+
+```json
+{ "action": "mode", "mode": "isolated|shared" }
+{ "action": "forward-add", "localPort": 18080, "remotePort": 8080, "shared": false }
+{ "action": "forward-remove", "localPort": 18080 }
+{ "action": "dns", "servers": ["1.1.1.1"] }
+{ "action": "hosts", "entries": ["198.51.100.10 api.example.test"] }
+{ "action": "test", "host": "198.51.100.10", "port": 8080 }
+{ "action": "pcap", "path": "D:\\apk-vm-capture.pcap" }
+```
+
+- Port forwards use `adb forward tcp:<hostPort> tcp:<guestPort>`.
+- DNS is applied by the emulator `-dns-server` flag on the next start.
+- Hosts entries are bind-mounted over the guest `/etc/hosts` (root required) and reapplied
+  after a plugin-managed boot.
+- `shared` forwards are reachable from other VMs through the emulator's host alias; the
+  QEMU NAT itself remains isolated.
+- pcap capture is passed to the emulator as `-tcpdump` and starts on the next emulator start;
+  download via `GET /apk-vm/network/pcap`.
+
 
 A public, dependency-free demo lives in [examples](examples/README.md):
 
