@@ -8,6 +8,18 @@
 
 **Run a real Android APK inside a local, rooted, open-source Android VM and preview it in the DeepSeek Harness sidebar — streamed as H.264/WebCodecs video at up to 60 fps.**
 
+<p align="center">
+  <a href="docs/screenshot-panel.png">
+    <img src="docs/screenshot-panel.png" alt="APK Virtual Machine panel with a live H.264 Android screen in DeepSeek Harness" width="820">
+  </a>
+</p>
+<p align="center"><sub>Real panel capture: rooted Android 14 guest, live H.264 stream, input controls and installed-app tools — no mockup.</sub></p>
+<p align="center">
+  <code>dsh plugin --profile web add dsh-apk-vm</code>
+  &nbsp;·&nbsp;
+  <a href="examples/README.md">reproducible demo</a>
+</p>
+
 This repository contains the static DSH plugin `dsh-apk-vm`. It adds a first-class sidebar
 entry ("APK Virtual Machine" / "APK 虚拟机") whose main panel boots an AOSP Android Emulator,
 installs an APK into the guest, streams the guest display into the panel, and forwards
