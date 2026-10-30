@@ -20,6 +20,13 @@
   <a href="examples/README.md">reproducible demo</a>
 </p>
 
+**Why it is useful**
+
+- **Sidebar-first Android** — install and use an APK without opening a separate emulator window.
+- **Real, low-latency stream** — H.264/WebCodecs up to 60 fps with tap, swipe, key and text input.
+- **Agent-native** — `apk_vm` tools, a live UI Inspector, copy-ready selectors and record/replay flows.
+- **Local and inspectable** — open-source AOSP emulator, rooted debug API, network/storage controls, no telemetry.
+
 This repository contains the static DSH plugin `dsh-apk-vm`. It adds a first-class sidebar
 entry ("APK Virtual Machine" / "APK 虚拟机") whose main panel boots an AOSP Android Emulator,
 installs an APK into the guest, streams the guest display into the panel, and forwards
