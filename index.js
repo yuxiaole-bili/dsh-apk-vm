@@ -32,6 +32,7 @@ import { collectStorage, cleanTempFiles, cleanSnapshots, cleanOrphanAvds, format
 import { buildApksFromAab, aabInfo, detectBundletool } from './lib/aab.js';
 import { readHarFile, summarizeHar, filterHar, toCurl } from './lib/har.js';
 import { runAssertions, compareScreenshot, createTestReport, reportMarkdown } from './lib/ui-tests.js';
+import { SshAdbTunnel } from './lib/remote.js';
 
 const PLUGIN_VERSION = (() => {
   try {
@@ -296,6 +297,7 @@ export function apply(ctx, config = {}) {
     };
   }
   let installInFlight = null;
+  let remoteTunnel = null;
   let startKick = null;
   let autoStartKicked = false;
   const frame = { buffer: null, at: 0, inFlight: null, receivedAt: [] };
@@ -1787,6 +1789,65 @@ export function apply(ctx, config = {}) {
       sendJson(res, 200, { ok: true, attached: serial, vm: await vm.status(), devices: await vm.listDevices() });
     });
 
+    register('/apk-vm/remote', async (req, res) => {
+      if (req.method === 'GET') {
+        sendJson(res, 200, { ok: true, tunnel: remoteTunnel ? remoteTunnel.status() : null });
+        return;
+      }
+      if (req.method !== 'POST') {
+        sendError(res, 405, 'GET or POST only');
+        return;
+      }
+      const body = await readJsonBody(req);
+      const action = String(body.action || 'connect').toLowerCase();
+      try {
+        if (action === 'disconnect') {
+          if (remoteTunnel) {
+            await remoteTunnel.stop();
+            remoteTunnel = null;
+          }
+          await stopScrcpy();
+          await vm.detachDevice();
+          frame.buffer = null;
+          frame.at = 0;
+          sendJson(res, 200, { ok: true, detached: true, tunnel: null, vm: await vm.status() });
+          return;
+        }
+        if (action !== 'connect') throw new Error(`unsupported remote action: ${action}`);
+        if (remoteTunnel) {
+          await remoteTunnel.stop();
+          remoteTunnel = null;
+        }
+        const tunnel = new SshAdbTunnel({
+          host: body.host,
+          user: body.user,
+          port: body.sshPort,
+          keyPath: body.keyPath,
+          remotePort: body.remotePort,
+          localPort: body.localPort,
+          sshPath: body.sshPath,
+        });
+        const started = await tunnel.start().catch(async (error) => {
+          await tunnel.stop();
+          throw error;
+        });
+        remoteTunnel = tunnel;
+        try {
+          await stopScrcpy();
+          await vm.attachDevice(started.serial);
+        } catch (error) {
+          await tunnel.stop();
+          remoteTunnel = null;
+          throw error;
+        }
+        frame.buffer = null;
+        frame.at = 0;
+        sendJson(res, 200, { ok: true, tunnel: tunnel.status(), vm: await vm.status() });
+      } catch (error) {
+        sendError(res, 400, error.message);
+      }
+    });
+
     register('/apk-vm/vm', async (req, res) => {
       if (req.method !== 'POST') {
         sendError(res, 405, 'POST only');
@@ -2521,6 +2582,14 @@ export function apply(ctx, config = {}) {
   ctx.inject(['webServer'], (host) => {
     host.effect(() => mountRoutes(host.webServer), 'dsh-apk-vm: http routes');
   });
+
+  ctx.effect(() => {
+    return () => {
+      const tunnel = remoteTunnel;
+      remoteTunnel = null;
+      if (tunnel) void tunnel.stop().catch(() => {});
+    };
+  }, 'dsh-apk-vm: ssh tunnel');
 
   // Optional warm start: boot the VM right after the plugin activates so the
   // first panel/tab open lands on a running (or nearly booted) device. This is

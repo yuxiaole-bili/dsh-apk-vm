@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.8.1
+
+Remote VM over SSH.
+
+### Added
+
+- **SSH adb tunnel** for a remote Android VM: forward a local loopback port to the remote
+  emulator's adb port with `ssh -N -L`, then attach the normal adb device. The key path is
+  supplied per connection and never stored.
+- Remote SSH card with host/user/key/remote-port fields, connect/disconnect state, and automatic
+  tunnel cleanup when the plugin unloads.
+
+### Notes
+
+- SSH forwarding requires an SSH server and an adb port reachable from that server
+  (for example an emulator started with its console port forwarded).
+- The remote host/user/key are not persisted.
+
 ## 0.8.0
 
 Sidebar workspace, APK debugging, network and regression tools.

@@ -30,7 +30,7 @@ window.__ModuleLoader__.load({
     var SWIPE_THRESHOLD_PX = 24;
     var FRAME_INTERVAL_MS = 500;
     var STATE_INTERVAL_MS = 2000;
-    var CLIENT_VERSION = '0.8.0';
+    var CLIENT_VERSION = '0.8.1';
 
     /* ------------------------------------------------------------------ *
      * Optional dsh-better-sidebar integration.
@@ -323,6 +323,15 @@ window.__ModuleLoader__.load({
       'devices.select': 'Select device…',
       'devices.attach': 'Attach',
       'devices.remotePlaceholder': 'host:port',
+      'remote.title': 'Remote VM (SSH)',
+      'remote.host': 'SSH host',
+      'remote.user': 'SSH user',
+      'remote.key': 'SSH key path (optional)',
+      'remote.remotePort': 'Remote adb port',
+      'remote.connect': 'Connect tunnel',
+      'remote.disconnect': 'Disconnect',
+      'remote.connected': 'SSH tunnel connected',
+      'remote.disconnected': 'SSH tunnel closed',
       'devices.detach': 'Detach',
       'devices.attached': 'Attached {serial}',
       'devices.detached': 'Detached external device',
@@ -603,6 +612,15 @@ window.__ModuleLoader__.load({
       'devices.select': '选择设备…',
       'devices.attach': '连接',
       'devices.remotePlaceholder': '主机:端口',
+      'remote.title': '远程 VM（SSH）',
+      'remote.host': 'SSH 主机',
+      'remote.user': 'SSH 用户',
+      'remote.key': 'SSH 私钥路径（可选）',
+      'remote.remotePort': '远端 adb 端口',
+      'remote.connect': '连接隧道',
+      'remote.disconnect': '断开',
+      'remote.connected': 'SSH 隧道已连接',
+      'remote.disconnected': 'SSH 隧道已关闭',
       'devices.detach': '断开',
       'devices.attached': '已连接 {serial}',
       'devices.detached': '已断开外部设备',
@@ -1369,6 +1387,24 @@ window.__ModuleLoader__.load({
         var remoteSerialState = React.useState('');
         var remoteSerial = remoteSerialState[0];
         var setRemoteSerial = remoteSerialState[1];
+        var remoteHostState = React.useState('');
+        var remoteHost = remoteHostState[0];
+        var setRemoteHost = remoteHostState[1];
+        var remoteUserState = React.useState('');
+        var remoteUser = remoteUserState[0];
+        var setRemoteUser = remoteUserState[1];
+        var remoteKeyState = React.useState('');
+        var remoteKey = remoteKeyState[0];
+        var setRemoteKey = remoteKeyState[1];
+        var remotePortState = React.useState('5558');
+        var remotePort = remotePortState[0];
+        var setRemotePort = remotePortState[1];
+        var remoteSshBusyState = React.useState(false);
+        var remoteSshBusy = remoteSshBusyState[0];
+        var setRemoteSshBusy = remoteSshBusyState[1];
+        var remoteSshState = React.useState(null);
+        var remoteSsh = remoteSshState[0];
+        var setRemoteSsh = remoteSshState[1];
         var deviceBusyState = React.useState(false);
         var deviceBusy = deviceBusyState[0];
         var setDeviceBusy = deviceBusyState[1];
@@ -2974,6 +3010,49 @@ window.__ModuleLoader__.load({
             loadState();
             loadDevices();
             loadSetup(true);
+          });
+        }
+
+        function connectRemoteSsh() {
+          if (remoteSshBusy || !remoteHost.trim() || !remoteUser.trim()) return;
+          setRemoteSshBusy(true);
+          requestJson('/apk-vm/remote', {
+            method: 'POST',
+            body: JSON.stringify({
+              action: 'connect',
+              host: remoteHost.trim(),
+              user: remoteUser.trim(),
+              keyPath: remoteKey.trim() || undefined,
+              remotePort: Number(remotePort) || 5558,
+            }),
+          }, T).then(function (result) {
+            if (!mountedRef.current) return;
+            setRemoteSshBusy(false);
+            if (!result.ok) {
+              pushToast('error', (result.error || T('err.action')).slice(0, 500));
+              return;
+            }
+            setRemoteSsh(result.data && result.data.tunnel ? result.data.tunnel : null);
+            pushToast('success', T('remote.connected'));
+            loadState();
+            loadDevices();
+          });
+        }
+
+        function disconnectRemoteSsh() {
+          if (remoteSshBusy) return;
+          setRemoteSshBusy(true);
+          requestJson('/apk-vm/remote', { method: 'POST', body: JSON.stringify({ action: 'disconnect' }) }, T).then(function (result) {
+            if (!mountedRef.current) return;
+            setRemoteSshBusy(false);
+            if (!result.ok) {
+              pushToast('error', (result.error || T('err.action')).slice(0, 500));
+              return;
+            }
+            setRemoteSsh(null);
+            pushToast('success', T('remote.disconnected'));
+            loadState();
+            loadDevices();
           });
         }
 
@@ -5148,6 +5227,88 @@ window.__ModuleLoader__.load({
           )
         );
 
+        var remoteCard = h(
+          'details',
+          { className: 'apkvm-card apkvm-debug' },
+          h(
+            'summary',
+            { className: 'apkvm-debug-summary' },
+            h('span', { className: 'apkvm-card-title' }, T('remote.title')),
+            h('span', { className: 'apkvm-dim', style: { marginLeft: 'auto' } }, remoteSsh ? remoteSsh.state || '' : ''),
+            h('span', { className: 'apkvm-chevron', 'aria-hidden': 'true' }, '▸')
+          ),
+          h(
+            'div',
+            { className: 'apkvm-debug-body' },
+            h('input', {
+              className: 'apkvm-input',
+              type: 'text',
+              value: remoteHost,
+              placeholder: T('remote.host'),
+              spellCheck: false,
+              disabled: remoteSshBusy,
+              onChange: function (event) {
+                setRemoteHost(event && event.target ? String(event.target.value) : '');
+              },
+            }),
+            h('input', {
+              className: 'apkvm-input',
+              type: 'text',
+              value: remoteUser,
+              placeholder: T('remote.user'),
+              spellCheck: false,
+              disabled: remoteSshBusy,
+              onChange: function (event) {
+                setRemoteUser(event && event.target ? String(event.target.value) : '');
+              },
+            }),
+            h('input', {
+              className: 'apkvm-input',
+              type: 'text',
+              value: remoteKey,
+              placeholder: T('remote.key'),
+              spellCheck: false,
+              disabled: remoteSshBusy,
+              onChange: function (event) {
+                setRemoteKey(event && event.target ? String(event.target.value) : '');
+              },
+            }),
+            h('input', {
+              className: 'apkvm-input',
+              type: 'text',
+              value: remotePort,
+              placeholder: T('remote.remotePort'),
+              spellCheck: false,
+              disabled: remoteSshBusy,
+              onChange: function (event) {
+                setRemotePort(event && event.target ? String(event.target.value) : '');
+              },
+            }),
+            h(
+              'div',
+              { style: { display: 'flex', alignItems: 'center', gap: '5px', flexWrap: 'wrap' } },
+              actionBtn(remoteSshBusy ? '…' : T('remote.connect'), {
+                key: 'remote-connect',
+                small: true,
+                disabled: remoteSshBusy || !remoteHost.trim() || !remoteUser.trim(),
+                onClick: connectRemoteSsh,
+              }),
+              remoteSsh
+                ? actionBtn(T('remote.disconnect'), {
+                    key: 'remote-disconnect',
+                    small: true,
+                    variant: 'danger',
+                    disabled: remoteSshBusy,
+                    onClick: disconnectRemoteSsh,
+                  })
+                : null
+            ),
+            remoteSsh && remoteSsh.serial
+              ? h('div', { className: 'apkvm-dim' }, 'adb ' + remoteSsh.serial)
+              : null
+          )
+        );
+
         var primaryAction =
           ready || busyState
             ? actionBtn(vmBusy ? T('action.stopping') : T('action.stop'), {
@@ -5585,6 +5746,7 @@ window.__ModuleLoader__.load({
               networkCard,
               storageCard,
               snapshotCard,
+              remoteCard,
               appsCard,
               diagCard,
               h('div', { className: 'apkvm-footnote', title: T('hint.boot') }, T('hint.short')),

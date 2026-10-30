@@ -45,7 +45,7 @@ same-origin, loopback-only debug HTTP API and an `apk_vm` Agent tool.
 > 当前 **Windows x64 与 Linux x86_64（headless）为端到端已验证平台**；macOS 仅做探测/CI
 > 覆盖，详见 `docs/LINUX-E2E.md`。
 
-**Status:** `0.8.0` · Apache-2.0 · no npm runtime dependencies · no build step.
+**Status:** `0.8.1` · Apache-2.0 · no npm runtime dependencies · no build step.
 
 This is an open-source DSH plugin published on npm as **`dsh-apk-vm`**. Repository:
 [github.com/yuxiaole-bili/dsh-apk-vm](https://github.com/yuxiaole-bili/dsh-apk-vm).
@@ -600,6 +600,7 @@ JSON bodies are bounded to 64 KiB; the raw APK upload is bounded to 500 MiB.
 | GET/HEAD | `/apk-vm/apk-icon?path=…` | Extract the raster launcher icon from the APK ZIP (PNG/WebP/JPEG). |
 | GET | `/apk-vm/devices` | List adb devices (`serial`, `state`, `kind`, `model`, `product`, transport) plus current/managed-device metadata. |
 | POST | `/apk-vm/device` | `{"serial":"<adb-serial>"}` attach an online physical/network device; `{"serial":""}` detach and restore the managed AVD. |
+| GET/POST | `/apk-vm/remote` | SSH adb tunnel: `POST {"action":"connect","host","user","keyPath"?,"remotePort":5558}` or `{"action":"disconnect"}`; `GET` returns tunnel status. |
 | POST | `/apk-vm/vm` | `{"action":"start"\|"stop"\|"restart"\|"snapshot"}`. |
 | POST | `/apk-vm/install` | `{"path":"C:/path/app.apk"}` → install + launch. |
 | POST | `/apk-vm/upload` | Raw APK/APKS/XAPK/AAB bytes (≤ 500 MiB) with the file name in the `x-apk-name` header → validate ZIP/APK magic, write to the OS temp dir, install + launch. |
