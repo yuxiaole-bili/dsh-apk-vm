@@ -30,7 +30,7 @@ window.__ModuleLoader__.load({
     var SWIPE_THRESHOLD_PX = 24;
     var FRAME_INTERVAL_MS = 500;
     var STATE_INTERVAL_MS = 2000;
-    var CLIENT_VERSION = '0.2.1';
+    var CLIENT_VERSION = '0.8.0';
 
     /* ------------------------------------------------------------------ *
      * Optional dsh-better-sidebar integration.
@@ -51,6 +51,26 @@ window.__ModuleLoader__.load({
 
     function getBetterSidebar() {
       return betterSidebar;
+    }
+
+    function readUiFlag(key, fallback) {
+      try {
+        if (typeof window === 'undefined' || !window.localStorage) return fallback;
+        var value = window.localStorage.getItem(key);
+        return value === null ? fallback : value === '1';
+      } catch (error) {
+        return fallback;
+      }
+    }
+
+    function writeUiFlag(key, value) {
+      try {
+        if (typeof window !== 'undefined' && window.localStorage) {
+          window.localStorage.setItem(key, value ? '1' : '0');
+        }
+      } catch (error) {
+        /* localStorage may be unavailable in hardened webviews */
+      }
     }
 
     function publishBetterSidebar(next) {
@@ -103,6 +123,20 @@ window.__ModuleLoader__.load({
       'action.installLaunch': 'Install & launch',
       'action.dismiss': 'Dismiss',
       'action.openSidebar': 'Open in side bar',
+      'action.expand': 'Expand',
+      'action.restore': 'Exit expanded',
+      'action.float': 'Float window',
+      'action.dock': 'Dock panel',
+      'action.tools': 'Tools',
+      'action.hideTools': 'Hide tools',
+      'stream.quality': 'Quality',
+      'stream.quality.low': 'Low 540p · 30 fps',
+      'stream.quality.balanced': 'Balanced 720p · 60 fps',
+      'stream.quality.high': 'High 960p · 60 fps',
+      'stream.quality.custom': 'Custom',
+      'stage.firstBoot': 'First boot can take ~30 s; later starts use the quick-boot snapshot.',
+      'version.mismatch': 'The panel UI is stale (client {client}, host {host}). Reload the panel; if it stays stale, restart DSH once.',
+      'version.reload': 'Reload UI',
       'a11y.refresh': 'Refresh VM state',
       'a11y.retry': 'Retry the request',
       'a11y.openSidebar': 'Open the APK VM in dsh-better-sidebar',
@@ -157,7 +191,12 @@ window.__ModuleLoader__.load({
       'debug.liveStop': 'Stop live',
       'debug.crash': 'Crash log',
       'debug.clipboardSet': 'Copy field to device',
-      'debug.clipboardGet': 'Get device clipboard',
+      'debug.clipboardGet': 'Copy device clipboard to host',
+      'debug.clipboardPasteHost': 'Paste host clipboard to device',
+      'debug.clipboardPasteHostDone': 'Host clipboard pasted to device',
+      'debug.clipboardUnavailable': 'Browser clipboard is unavailable; use the field instead',
+      'debug.visualTest': 'UI check',
+      'debug.visualTestDone': 'UI check complete',
       'debug.clipboardEmpty': 'Type text in the input field first',
       'debug.clipboardSetDone': 'Device clipboard updated',
       'debug.clipboardGot': 'Device clipboard copied to host',
@@ -206,6 +245,10 @@ window.__ModuleLoader__.load({
       'network.testFail': 'Connectivity check failed',
       'network.pcap': 'Download pcap',
       'network.pcapPath': 'Host pcap path (.pcap, next start)',
+      'network.harPath': 'HAR file path (.har)',
+      'network.harLoad': 'Load HAR',
+      'network.harLoaded': 'HAR loaded',
+      'network.harEmpty': 'No matching requests.',
       'network.restartRequired': 'Restart the VM to apply custom DNS',
       'network.sharedHint': 'Shared forwards are reachable from other VMs through the emulator host alias.',
       'network.guestUrl': 'Guest URL: {url}',
@@ -220,6 +263,15 @@ window.__ModuleLoader__.load({
       'flow.saved': 'Saved {name}',
       'flow.done': 'Replayed {name}',
       'flow.count': '{n} step(s)',
+      'snapshots.title': 'VM snapshots',
+      'snapshots.placeholder': 'snapshot name',
+      'snapshots.save': 'Save',
+      'snapshots.restore': 'Restore',
+      'snapshots.delete': 'Delete',
+      'snapshots.empty': 'No named snapshots yet.',
+      'snapshots.saved': 'Snapshot saved: {name}',
+      'snapshots.restored': 'Restored snapshot: {name}',
+      'snapshots.deleted': 'Deleted snapshot: {name}',
       'storage.title': 'Storage',
       'storage.refresh': 'Refresh',
       'storage.cleanTemp': 'Clean temp',
@@ -247,6 +299,9 @@ window.__ModuleLoader__.load({
       'setup.installImage': 'Download image',
       'setup.installTools': 'Install SDK tools',
       'setup.bootstrapSdk': 'Bootstrap SDK',
+      'setup.oneClick': 'One-click setup',
+      'setup.oneClickRunning': 'Setting up SDK, image and AVD…',
+      'setup.oneClickDone': 'Setup finished; starting the VM…',
       'setup.refresh': 'Re-check',
       'setup.switch': 'Switch AVD',
       'setup.loading': 'Checking environment…',
@@ -258,12 +313,16 @@ window.__ModuleLoader__.load({
       'instances.created': 'Created instance {id}',
       'instances.destroyed': 'Destroyed instance {id}',
       'instances.manage': 'VM instances',
+      'grid.title': 'Grid view',
+      'grid.empty': 'No running instances to show.',
+      'grid.close': 'Close grid',
       'instances.stop': 'Stop',
       'instances.stopped': 'Stopped instance {id}',
       'instances.idle': 'idle {seconds}s',
       'devices.title': 'Physical/remote adb device',
       'devices.select': 'Select device…',
       'devices.attach': 'Attach',
+      'devices.remotePlaceholder': 'host:port',
       'devices.detach': 'Detach',
       'devices.attached': 'Attached {serial}',
       'devices.detached': 'Detached external device',
@@ -274,8 +333,16 @@ window.__ModuleLoader__.load({
       'apps.empty': 'No third-party apps installed.',
       'apps.thirdParty': 'third-party only',
       'apps.stop': 'Stop',
+      'apps.launch': 'Launch',
       'apps.clear': 'Clear data',
       'apps.uninstall': 'Uninstall',
+      'apps.deepLink': 'Deep link',
+      'apps.deepLinkPlaceholder': 'myapp://path or https://…',
+      'apps.openDeepLink': 'Open link',
+      'apps.permission': 'Permission',
+      'apps.permissionPlaceholder': 'android.permission.CAMERA',
+      'apps.grant': 'Grant',
+      'apps.revoke': 'Revoke',
       'apps.done': '{action}: {packageName}',
       'debug.empty': 'No debug output yet.',
       'debug.identity': '{release} · API {sdk} · {abi}',
@@ -336,6 +403,20 @@ window.__ModuleLoader__.load({
       'action.installLaunch': '安装并启动',
       'action.dismiss': '关闭',
       'action.openSidebar': '在侧栏打开',
+      'action.expand': '放大',
+      'action.restore': '退出放大',
+      'action.float': '浮窗',
+      'action.dock': '停靠面板',
+      'action.tools': '工具',
+      'action.hideTools': '收起工具',
+      'stream.quality': '清晰度',
+      'stream.quality.low': '低 540p · 30 fps',
+      'stream.quality.balanced': '均衡 720p · 60 fps',
+      'stream.quality.high': '高 960p · 60 fps',
+      'stream.quality.custom': '自定义',
+      'stage.firstBoot': '首次启动约需 30 秒；之后会使用快速启动快照。',
+      'version.mismatch': '面板 UI 是旧缓存（客户端 {client}，主机 {host}）。刷新面板；仍不更新则重启一次 DSH。',
+      'version.reload': '刷新 UI',
       'a11y.refresh': '刷新虚拟机状态',
       'a11y.retry': '重试请求',
       'a11y.openSidebar': '在 dsh-better-sidebar 中打开 APK 虚拟机',
@@ -390,7 +471,12 @@ window.__ModuleLoader__.load({
       'debug.liveStop': '停止实时',
       'debug.crash': '崩溃日志',
       'debug.clipboardSet': '文本写入设备剪贴板',
-      'debug.clipboardGet': '读取设备剪贴板',
+      'debug.clipboardGet': '复制设备剪贴板到电脑',
+      'debug.clipboardPasteHost': '把电脑剪贴板粘贴到设备',
+      'debug.clipboardPasteHostDone': '已把电脑剪贴板写入设备',
+      'debug.clipboardUnavailable': '浏览器剪贴板不可用，请改用输入框',
+      'debug.visualTest': 'UI 检查',
+      'debug.visualTestDone': 'UI 检查完成',
       'debug.clipboardEmpty': '请先在上方输入框输入文本',
       'debug.clipboardSetDone': '已写入设备剪贴板',
       'debug.clipboardGot': '已复制设备剪贴板到主机',
@@ -439,6 +525,10 @@ window.__ModuleLoader__.load({
       'network.testFail': '连通性检查失败',
       'network.pcap': '下载 pcap',
       'network.pcapPath': '宿主机 pcap 路径（.pcap，下次启动）',
+      'network.harPath': 'HAR 文件路径（.har）',
+      'network.harLoad': '加载 HAR',
+      'network.harLoaded': 'HAR 已加载',
+      'network.harEmpty': '没有匹配的请求。',
       'network.restartRequired': '重启虚拟机后生效自定义 DNS',
       'network.sharedHint': '共享转发可被其他 VM 通过模拟器宿主别名访问。',
       'network.guestUrl': 'Guest URL: {url}',
@@ -453,6 +543,15 @@ window.__ModuleLoader__.load({
       'flow.saved': '已保存 {name}',
       'flow.done': '已回放 {name}',
       'flow.count': '{n} 步',
+      'snapshots.title': 'VM 快照',
+      'snapshots.placeholder': '快照名称',
+      'snapshots.save': '保存',
+      'snapshots.restore': '恢复',
+      'snapshots.delete': '删除',
+      'snapshots.empty': '还没有命名快照。',
+      'snapshots.saved': '已保存快照：{name}',
+      'snapshots.restored': '已恢复快照：{name}',
+      'snapshots.deleted': '已删除快照：{name}',
       'storage.title': '存储',
       'storage.refresh': '刷新',
       'storage.cleanTemp': '清理临时文件',
@@ -480,6 +579,9 @@ window.__ModuleLoader__.load({
       'setup.installImage': '下载镜像',
       'setup.installTools': '安装 SDK 工具',
       'setup.bootstrapSdk': '从零安装 SDK',
+      'setup.oneClick': '一键初始化',
+      'setup.oneClickRunning': '正在安装 SDK、镜像并创建 AVD…',
+      'setup.oneClickDone': '初始化完成，正在启动虚拟机…',
       'setup.refresh': '重新检测',
       'setup.switch': '切换 AVD',
       'setup.loading': '正在检测环境…',
@@ -491,12 +593,16 @@ window.__ModuleLoader__.load({
       'instances.created': '已创建实例 {id}',
       'instances.destroyed': '已销毁实例 {id}',
       'instances.manage': '虚拟机实例',
+      'grid.title': '网格视图',
+      'grid.empty': '没有正在运行的实例。',
+      'grid.close': '关闭网格',
       'instances.stop': '停止',
       'instances.stopped': '已停止实例 {id}',
       'instances.idle': '空闲 {seconds}s',
       'devices.title': '物理/远程 adb 设备',
       'devices.select': '选择设备…',
       'devices.attach': '连接',
+      'devices.remotePlaceholder': '主机:端口',
       'devices.detach': '断开',
       'devices.attached': '已连接 {serial}',
       'devices.detached': '已断开外部设备',
@@ -507,8 +613,16 @@ window.__ModuleLoader__.load({
       'apps.empty': '没有已安装的第三方应用。',
       'apps.thirdParty': '仅第三方',
       'apps.stop': '停止',
+      'apps.launch': '启动',
       'apps.clear': '清数据',
       'apps.uninstall': '卸载',
+      'apps.deepLink': 'Deep Link',
+      'apps.deepLinkPlaceholder': 'myapp://path 或 https://…',
+      'apps.openDeepLink': '打开链接',
+      'apps.permission': '权限',
+      'apps.permissionPlaceholder': 'android.permission.CAMERA',
+      'apps.grant': '授予',
+      'apps.revoke': '撤销',
       'apps.done': '{action}：{packageName}',
       'debug.empty': '暂无调试输出。',
       'debug.identity': '{release} · API {sdk} · {abi}',
@@ -1064,7 +1178,38 @@ window.__ModuleLoader__.load({
       '.apkvm-embedded .apkvm-phonewrap{flex:0 0 auto;min-height:320px}' +
       '.apkvm-embedded .apkvm-controls{max-width:none}' +
       '@media (max-width:900px){.apkvm-header{flex-wrap:wrap}}' +
-      '.apkvm-embedded .apkvm-header{flex-wrap:wrap}';
+      '.apkvm-embedded .apkvm-header{flex-wrap:wrap}' +
+      '.apkvm-page.apkvm-maximized{position:fixed;inset:0;z-index:2147483000;width:100vw;height:100vh;background:var(--dsw-alias-bg-base);box-shadow:0 0 0 1px var(--dsw-alias-border-l2)}' +
+      '.apkvm-page.apkvm-maximized .apkvm-header{flex:0 0 auto;background:var(--dsw-alias-bg-base);padding-right:142px}' +
+      '.apkvm-page.apkvm-maximized .apkvm-body{flex:1 1 auto;min-height:0;padding:10px 16px 14px;gap:10px;overflow:hidden;flex-direction:row}' +
+      '.apkvm-page.apkvm-maximized .apkvm-aside{display:none}' +
+      '.apkvm-page.apkvm-maximized .apkvm-stage{flex:1 1 auto;min-height:0;max-height:none}' +
+      '.apkvm-page.apkvm-maximized .apkvm-phonewrap{flex:1 1 auto;min-height:0;padding:0}' +
+      '.apkvm-page.apkvm-maximized .apkvm-phone{height:100%;max-height:calc(100vh - 150px);padding:6px;border-radius:22px}' +
+      '.apkvm-page.apkvm-maximized .apkvm-screen{height:100%;max-height:calc(100vh - 170px);border-radius:16px}' +
+      '.apkvm-page.apkvm-maximized .apkvm-controls{max-width:760px}' +
+      '.apkvm-page.apkvm-maximized .apkvm-stagehint{max-width:760px}' +
+      '.apkvm-page.apkvm-maximized .apkvm-subtitle,.apkvm-page.apkvm-maximized .apkvm-pillmeta{display:none}' +
+      '.apkvm-page.apkvm-tools-collapsed .apkvm-aside{display:none}' +
+      '.apkvm-max-close{position:absolute;top:9px;right:12px;z-index:6;appearance:none;font:inherit;font-size:12px;font-weight:600;height:30px;padding:0 12px;border-radius:8px;border:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-primary);cursor:pointer}' +
+      '.apkvm-max-close:hover{background:var(--dsw-alias-bg-layer-2);border-color:var(--dsw-alias-brand-primary)}' +
+      '.apkvm-quality{font:inherit;font-size:11px;height:24px;max-width:150px;padding:0 5px;border-radius:7px;border:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-base);color:var(--dsw-alias-label-primary);flex:none}' +
+      '.apkvm-version-banner{flex:0 0 auto}' +
+      '.apkvm-version-banner .apkvm-banner-text{white-space:normal}' +
+      '.apkvm-grid-overlay{position:fixed;inset:0;z-index:2147483000;background:var(--dsw-alias-bg-base);display:flex;flex-direction:column;gap:10px;padding:12px 14px}' +
+      '.apkvm-grid-head{display:flex;align-items:center;gap:8px;flex:0 0 auto}' +
+      '.apkvm-grid{flex:1 1 auto;min-height:0;overflow:auto;display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px;align-content:start}' +
+      '.apkvm-grid-card{appearance:none;font:inherit;text-align:left;cursor:pointer;border:1px solid var(--dsw-alias-border-l2);border-radius:12px;background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-primary);padding:8px;display:flex;flex-direction:column;gap:6px;min-height:260px}' +
+      '.apkvm-grid-card:hover{border-color:var(--dsw-alias-brand-primary)}' +
+      '.apkvm-grid-card img{flex:1 1 auto;min-height:0;width:100%;height:240px;object-fit:contain;background:var(--dsw-alias-bg-base);border-radius:8px}' +
+      '.apkvm-grid-meta{display:flex;align-items:center;gap:6px;font-size:11px;color:var(--dsw-alias-label-secondary)}' +
+      '.apkvm-page.apkvm-floating .apkvm-stage{position:fixed;right:14px;bottom:14px;z-index:2147483000;width:min(360px,92vw);height:min(700px,88vh);padding:6px;border:1px solid var(--dsw-alias-border-l2);border-radius:16px;background:var(--dsw-alias-bg-layer-1);overflow:hidden}' +
+      '.apkvm-page.apkvm-floating .apkvm-stage .apkvm-phonewrap{min-height:0;flex:1 1 auto}' +
+      '.apkvm-page.apkvm-floating .apkvm-stage .apkvm-phone{height:100%;padding:4px;border-radius:14px}' +
+      '.apkvm-page.apkvm-floating .apkvm-stage .apkvm-screen{border-radius:11px}' +
+      '.apkvm-page.apkvm-floating .apkvm-stage .apkvm-controls{gap:3px;max-width:100%}' +
+      '.apkvm-page.apkvm-floating .apkvm-stage .apkvm-textrow{display:none}' +
+      '.apkvm-page.apkvm-floating .apkvm-stage .apkvm-stagehint{display:none}';
 
     /* ------------------------------------------------------------------ *
      * Render-error boundary: an unexpected exception inside the panel keeps
@@ -1172,6 +1317,15 @@ window.__ModuleLoader__.load({
         var appActionBusyState = React.useState('');
         var appActionBusy = appActionBusyState[0];
         var setAppActionBusy = appActionBusyState[1];
+        var deepLinkState = React.useState('');
+        var deepLink = deepLinkState[0];
+        var setDeepLink = deepLinkState[1];
+        var permissionPackageState = React.useState('');
+        var permissionPackage = permissionPackageState[0];
+        var setPermissionPackage = permissionPackageState[1];
+        var permissionNameState = React.useState('');
+        var permissionName = permissionNameState[0];
+        var setPermissionName = permissionNameState[1];
 
         var vmBusyState = React.useState(false);
         var vmBusy = vmBusyState[0];
@@ -1212,6 +1366,9 @@ window.__ModuleLoader__.load({
         var devicePickState = React.useState('');
         var devicePick = devicePickState[0];
         var setDevicePick = devicePickState[1];
+        var remoteSerialState = React.useState('');
+        var remoteSerial = remoteSerialState[0];
+        var setRemoteSerial = remoteSerialState[1];
         var deviceBusyState = React.useState(false);
         var deviceBusy = deviceBusyState[0];
         var setDeviceBusy = deviceBusyState[1];
@@ -1226,6 +1383,12 @@ window.__ModuleLoader__.load({
         var instancesListState = React.useState([]);
         var instancesList = instancesListState[0];
         var setInstancesList = instancesListState[1];
+        var gridOpenState = React.useState(false);
+        var gridOpen = gridOpenState[0];
+        var setGridOpen = gridOpenState[1];
+        var gridTickState = React.useState(Date.now());
+        var gridTick = gridTickState[0];
+        var setGridTick = gridTickState[1];
         var instanceBusyState = React.useState(false);
         var instanceBusy = instanceBusyState[0];
         var setInstanceBusy = instanceBusyState[1];
@@ -1289,6 +1452,15 @@ window.__ModuleLoader__.load({
         var storageConfirmState = React.useState('');
         var storageConfirm = storageConfirmState[0];
         var setStorageConfirm = storageConfirmState[1];
+        var snapshotNamesState = React.useState([]);
+        var snapshotNames = snapshotNamesState[0];
+        var setSnapshotNames = snapshotNamesState[1];
+        var snapshotInputState = React.useState('');
+        var snapshotInput = snapshotInputState[0];
+        var setSnapshotInput = snapshotInputState[1];
+        var snapshotBusyState = React.useState('');
+        var snapshotBusy = snapshotBusyState[0];
+        var setSnapshotBusy = snapshotBusyState[1];
 
         var proxyState = React.useState({ host: '', port: '' });
         var proxy = proxyState[0];
@@ -1323,6 +1495,15 @@ window.__ModuleLoader__.load({
         var pcapPathState = React.useState('');
         var pcapPath = pcapPathState[0];
         var setPcapPath = pcapPathState[1];
+        var harPathState = React.useState('');
+        var harPath = harPathState[0];
+        var setHarPath = harPathState[1];
+        var harResultState = React.useState(null);
+        var harResult = harResultState[0];
+        var setHarResult = harResultState[1];
+        var harBusyState = React.useState(false);
+        var harBusy = harBusyState[0];
+        var setHarBusy = harBusyState[1];
 
         var actualFpsState = React.useState(0);
         var actualFps = actualFpsState[0];
@@ -1373,9 +1554,32 @@ window.__ModuleLoader__.load({
         var canvasRef = React.useRef(null);
         var decoderRef = React.useRef(null);
         var wsRef = React.useRef(null);
+        var pageRef = React.useRef(null);
+        var maximizedState = React.useState(function () {
+          return readUiFlag('apk-vm.maximized', false);
+        });
+        var isMaximized = maximizedState[0];
+        var setIsMaximized = maximizedState[1];
+        var toolsState = React.useState(!embedded);
+        var toolsOpen = toolsState[0];
+        var setToolsOpen = toolsState[1];
+        var floatingState = React.useState(false);
+        var isFloating = floatingState[0];
+        var setIsFloating = floatingState[1];
+        var qualityBusyState = React.useState('');
+        var qualityBusy = qualityBusyState[0];
+        var setQualityBusy = qualityBusyState[1];
 
         /* ---- derived snapshot values --------------------------------- */
         var vmInfo = snapshot ? snapshot.vm : null;
+        var hostVersion = snapshot && snapshot.pluginVersion ? String(snapshot.pluginVersion) : '';
+        var versionMismatch = Boolean(hostVersion && hostVersion !== CLIENT_VERSION);
+        var h264Status =
+          snapshot && isObject(snapshot.stream) && isObject(snapshot.stream.h264)
+            ? snapshot.stream.h264
+            : null;
+        var streamPreset = h264Status && h264Status.preset ? String(h264Status.preset) : 'custom';
+        var streamQualityValue = qualityBusy || streamPreset;
         var clientReport = snapshot && isObject(snapshot.client) ? snapshot.client : null;
         var wsOrigin = snapshot && snapshot.origin ? snapshot.origin : '';
         var apkInfo = snapshot ? snapshot.apk : null;
@@ -1433,6 +1637,7 @@ window.__ModuleLoader__.load({
             pillMeta.push(T(bootKey, { s: bootSeconds }));
           }
         }
+        pillMeta.push('v' + CLIENT_VERSION);
         var subtitleText = apkInfo
           ? T('apk.current', { name: apkInfo.label || apkInfo.packageName || apkInfo.path })
           : T('subtitle');
@@ -1525,8 +1730,39 @@ window.__ModuleLoader__.load({
         // Load network details once the VM becomes ready (the first render often
         // happens while the state is still loading).
         React.useEffect(function () {
-          if (ready) loadNetwork();
+          if (ready) {
+            loadNetwork();
+            loadSnapshots();
+          }
         }, [ready, activeInstance]);
+
+        React.useEffect(function () {
+          if (!gridOpen) return undefined;
+          var timer = setInterval(function () {
+            if (mountedRef.current) setGridTick(Date.now());
+          }, 1500);
+          return function () {
+            clearInterval(timer);
+          };
+        }, [gridOpen]);
+
+        // Escape leaves the expanded VM view; the expand button is inside the
+        // full-screen overlay too, so mouse-only users are never trapped.
+        React.useEffect(function () {
+          if (!isMaximized || typeof document === 'undefined' || typeof document.addEventListener !== 'function') {
+            return undefined;
+          }
+          function onKeyDown(event) {
+            if (event && event.key === 'Escape') {
+              setIsMaximized(false);
+              writeUiFlag('apk-vm.maximized', false);
+            }
+          }
+          document.addEventListener('keydown', onKeyDown);
+          return function () {
+            document.removeEventListener('keydown', onKeyDown);
+          };
+        }, [isMaximized]);
 
         // Track document visibility so the frame stream pauses when hidden.
         React.useEffect(function () {
@@ -1887,6 +2123,11 @@ window.__ModuleLoader__.load({
           return id === 'default' ? '/apk-vm' + pathname : '/apk-vm/instances/' + encodeURIComponent(id) + pathname;
         }
 
+        function instanceFrameSrc(id) {
+          var prefix = id === 'default' ? '/apk-vm/frame' : '/apk-vm/instances/' + encodeURIComponent(id) + '/frame';
+          return prefix + '?t=' + String(gridTick);
+        }
+
         function setActiveInstanceId(id) {
           var next = id || 'default';
           activeInstanceRef.current = next;
@@ -2239,6 +2480,64 @@ window.__ModuleLoader__.load({
           });
         }
 
+        function toggleMaximized() {
+          setIsMaximized(function (value) {
+            var next = !value;
+            writeUiFlag('apk-vm.maximized', next);
+            return next;
+          });
+        }
+
+        function toggleTools() {
+          setToolsOpen(function (value) {
+            return !value;
+          });
+        }
+
+        function applyStreamQuality(preset) {
+          if (!ready || qualityBusy || activeInstance !== 'default') return;
+          setQualityBusy(preset);
+          requestJson(
+            '/apk-vm/stream/quality',
+            { method: 'POST', body: JSON.stringify({ preset: preset }) },
+            T
+          ).then(function (result) {
+            if (!mountedRef.current) return;
+            setQualityBusy('');
+            if (!result.ok) {
+              pushToast('error', T('err.action') + ': ' + result.error);
+              return;
+            }
+            pushToast('success', T('stream.quality') + ': ' + T('stream.quality.' + preset));
+            loadState();
+          });
+        }
+
+        function reloadUi() {
+          if (typeof window !== 'undefined' && window.location && typeof window.location.reload === 'function') {
+            window.location.reload();
+          }
+        }
+
+        function loadHar() {
+          var target = String(harPath || '').trim();
+          if (harBusy || !target) return;
+          setHarBusy(true);
+          requestJson(instancePath('/network/har'), {
+            method: 'POST',
+            body: JSON.stringify({ path: target }),
+          }, T).then(function (result) {
+            if (!mountedRef.current) return;
+            setHarBusy(false);
+            if (!result.ok) {
+              pushToast('error', (result.error || T('err.action')).slice(0, 500));
+              return;
+            }
+            setHarResult(isObject(result.data) ? result.data : null);
+            pushToast('success', T('network.harLoaded'));
+          });
+        }
+
         function loadNetwork() {
           if (!ready) return Promise.resolve(null);
           setNetworkBusy('load');
@@ -2384,6 +2683,37 @@ window.__ModuleLoader__.load({
           });
         }
 
+        function loadSnapshots() {
+          return requestJson(instancePath('/snapshots'), null, T).then(function (result) {
+            if (!mountedRef.current) return result;
+            if (result.ok && isObject(result.data) && Array.isArray(result.data.names)) {
+              setSnapshotNames(result.data.names);
+            }
+            return result;
+          });
+        }
+
+        function snapshotAction(action, name) {
+          if (snapshotBusy) return;
+          setSnapshotBusy(action + ':' + name);
+          requestJson(instancePath('/snapshots'), {
+            method: 'POST',
+            body: JSON.stringify({ action: action, name: name }),
+          }, T).then(function (result) {
+            if (!mountedRef.current) return;
+            setSnapshotBusy('');
+            if (!result.ok) {
+              pushToast('error', (result.error || T('err.action')).slice(0, 400));
+              return;
+            }
+            var key = action === 'save' ? 'snapshots.saved' : action === 'load' ? 'snapshots.restored' : 'snapshots.deleted';
+            pushToast('success', T(key, { name: name }));
+            if (action === 'save') setSnapshotInput('');
+            loadSnapshots();
+            if (action === 'load') loadState();
+          });
+        }
+
         function loadStorage() {
           setStorageBusy('load');
           setStorageError('');
@@ -2499,6 +2829,53 @@ window.__ModuleLoader__.load({
           });
         }
 
+        function openDeepLinkAction() {
+          if (!ready || appActionBusy) return;
+          var target = String(deepLink || '').trim();
+          if (!target) {
+            pushToast('error', T('apps.deepLinkPlaceholder'));
+            return;
+          }
+          setAppActionBusy('open-url');
+          requestJson(instancePath('/debug/action'), {
+            method: 'POST',
+            body: JSON.stringify({ action: 'open-url', url: target }),
+          }, T).then(function (result) {
+            if (!mountedRef.current) return;
+            setAppActionBusy('');
+            if (!result.ok) {
+              pushToast('error', (result.error || T('err.action')).slice(0, 400));
+              return;
+            }
+            pushToast('success', T('apps.deepLink') + ': ' + target);
+            loadState();
+          });
+        }
+
+        function changePermission(granted) {
+          if (!ready || appActionBusy) return;
+          var pkg = String(permissionPackage || '').trim();
+          var permission = String(permissionName || '').trim();
+          if (!pkg || !permission) {
+            pushToast('error', T('apps.permissionPlaceholder'));
+            return;
+          }
+          var action = granted ? 'grant' : 'revoke';
+          setAppActionBusy(action + ':' + pkg);
+          requestJson(instancePath('/debug/action'), {
+            method: 'POST',
+            body: JSON.stringify({ action: action, packageName: pkg, permission: permission }),
+          }, T).then(function (result) {
+            if (!mountedRef.current) return;
+            setAppActionBusy('');
+            if (!result.ok) {
+              pushToast('error', (result.error || T('err.action')).slice(0, 400));
+              return;
+            }
+            pushToast('success', T('apps.permission') + ': ' + permission);
+          });
+        }
+
         function toggleApps() {
           var next = !appsOpen;
           setAppsOpen(next);
@@ -2579,6 +2956,27 @@ window.__ModuleLoader__.load({
           });
         }
 
+        function attachRemoteDevice() {
+          var serial = String(remoteSerial || '').trim();
+          if (!serial || deviceBusy) return;
+          setDeviceBusy(true);
+          setDeviceError('');
+          requestJson('/apk-vm/device', { method: 'POST', body: JSON.stringify({ serial: serial }) }, T).then(function (result) {
+            if (!mountedRef.current) return;
+            setDeviceBusy(false);
+            if (!result.ok) {
+              var data = isObject(result.data) ? result.data : {};
+              pushToast('error', (data.error || result.error || T('err.action')).slice(0, 500));
+              return;
+            }
+            pushToast('success', T('devices.attached', { serial: serial }));
+            setRemoteSerial('');
+            loadState();
+            loadDevices();
+            loadSetup(true);
+          });
+        }
+
         function detachDevice() {
           if (deviceBusy) return;
           setDeviceBusy(true);
@@ -2600,7 +2998,11 @@ window.__ModuleLoader__.load({
         function runSetupAction(action) {
           if (setupBusy) return;
           setSetupBusy(true);
-          requestJson('/apk-vm/setup', { method: 'POST', body: JSON.stringify({ action: action }) }, T).then(function (result) {
+          requestJson(
+            '/apk-vm/setup',
+            { method: 'POST', body: JSON.stringify({ action: action, confirmDownload: true }) },
+            T
+          ).then(function (result) {
             if (!mountedRef.current) return;
             setSetupBusy(false);
             var data = isObject(result.data) ? result.data : {};
@@ -2613,6 +3015,57 @@ window.__ModuleLoader__.load({
             loadSetup(true);
             loadState();
           });
+        }
+
+        function runOneClickSetup() {
+          if (setupBusy) return;
+          var order = ['bootstrap-sdk', 'install-tools', 'install-image', 'create-avd'];
+          var steps = order.filter(function (id) {
+            return (setupActions || []).some(function (entry) {
+              return entry.id === id;
+            });
+          });
+          if (!steps.length) {
+            pushToast('error', T('setup.ok'));
+            return;
+          }
+          setSetupBusy(true);
+          pushToast('success', T('setup.oneClickRunning'));
+          var failed = false;
+          var chain = Promise.resolve();
+          steps.forEach(function (action) {
+            chain = chain.then(function () {
+              if (failed) return null;
+              return requestJson(
+                '/apk-vm/setup',
+                { method: 'POST', body: JSON.stringify({ action: action, confirmDownload: true }) },
+                T
+              ).then(function (result) {
+                var data = isObject(result.data) ? result.data : {};
+                if (!result.ok || data.ok === false) {
+                  failed = true;
+                  var detail = data.result && data.result.error ? data.result.error : (data.result && data.result.output ? data.result.output : result.error || '');
+                  pushToast('error', String(detail || T('err.state')).slice(0, 500));
+                }
+              });
+            });
+          });
+          chain
+            .then(function () {
+              if (!mountedRef.current) return;
+              setSetupBusy(false);
+              loadSetup(true);
+              loadState();
+              if (!failed) {
+                pushToast('success', T('setup.oneClickDone'));
+                runVmAction('start');
+              }
+            })
+            .catch(function (error) {
+              if (!mountedRef.current) return;
+              setSetupBusy(false);
+              pushToast('error', String(error && error.message ? error.message : error).slice(0, 500));
+            });
         }
 
         /* ---- actions -------------------------------------------------- */
@@ -2839,6 +3292,9 @@ window.__ModuleLoader__.load({
           });
         }
 
+        // Clipboard is intentionally passive: host clipboard is read or written
+        // only inside these explicit click handlers. Never poll, listen to
+        // clipboard events, or sync in the background.
         function setDeviceClipboard() {
           if (!ready) return;
           var text = String(textInput == null ? '' : textInput);
@@ -2873,6 +3329,61 @@ window.__ModuleLoader__.load({
               navigator.clipboard.writeText(text).catch(function () {});
             }
             pushToast('success', T('debug.clipboardGot'));
+          });
+        }
+
+        function pasteHostClipboardToDevice() {
+          if (!ready) return;
+          if (
+            typeof navigator === 'undefined' ||
+            !navigator.clipboard ||
+            typeof navigator.clipboard.readText !== 'function'
+          ) {
+            pushToast('error', T('debug.clipboardUnavailable'));
+            return;
+          }
+          navigator.clipboard.readText().then(
+            function (text) {
+              if (!mountedRef.current) return;
+              if (!text) {
+                pushToast('error', T('debug.clipboardEmpty'));
+                return;
+              }
+              requestJson(
+                instancePath('/clipboard'),
+                { method: 'POST', body: JSON.stringify({ text: text, paste: false }) },
+                T
+              ).then(function (result) {
+                if (!mountedRef.current) return;
+                if (!result.ok) {
+                  pushToast('error', (result.error || T('err.action')).slice(0, 300));
+                  return;
+                }
+                setDebugOutput('clipboard host -> device (' + text.length + ' chars)');
+                pushToast('success', T('debug.clipboardPasteHostDone'));
+              });
+            },
+            function () {
+              pushToast('error', T('debug.clipboardUnavailable'));
+            }
+          );
+        }
+
+        function runUiTest() {
+          if (!ready || debugBusy) return;
+          setDebugBusy(true);
+          requestJson(instancePath('/ui-test'), {
+            method: 'POST',
+            body: JSON.stringify({ name: 'panel', assertions: [], updateBaseline: false }),
+          }, T).then(function (result) {
+            if (!mountedRef.current) return;
+            setDebugBusy(false);
+            if (!result.ok) {
+              pushToast('error', (result.error || T('err.action')).slice(0, 500));
+              return;
+            }
+            setDebugOutput(String((result.data && (result.data.markdown || result.data.report)) || ''));
+            pushToast('success', T('debug.visualTestDone'));
           });
         }
 
@@ -3441,6 +3952,31 @@ window.__ModuleLoader__.load({
               h(
                 'div',
                 { className: 'apkvm-toolsline' },
+                h('input', {
+                  className: 'apkvm-input',
+                  type: 'text',
+                  value: remoteSerial,
+                  placeholder: T('devices.remotePlaceholder'),
+                  spellCheck: false,
+                  disabled: deviceBusy,
+                  style: { flex: '0 1 96px', minWidth: '0' },
+                  onChange: function (event) {
+                    setRemoteSerial(event && event.target ? String(event.target.value) : '');
+                  },
+                }),
+                h(
+                  'button',
+                  {
+                    type: 'button',
+                    className: 'apkvm-mini',
+                    disabled: deviceBusy || !remoteSerial.trim(),
+                    onClick: function (event) {
+                      event.preventDefault();
+                      attachRemoteDevice();
+                    },
+                  },
+                  T('devices.attach')
+                ),
                 h(
                   'select',
                   {
@@ -3490,6 +4026,15 @@ window.__ModuleLoader__.load({
               h(
                 'div',
                 { style: { display: 'flex', alignItems: 'center', gap: '5px', flexWrap: 'wrap' } },
+                setupActions.length > 1
+                  ? actionBtn(T('setup.oneClick'), {
+                      key: 'setup-one-click',
+                      small: true,
+                      variant: 'primary',
+                      disabled: setupBusy,
+                      onClick: runOneClickSetup,
+                    })
+                  : null,
                 setupActions.map(function (entry) {
                   var label = entry.id === 'create-avd'
                     ? T('setup.createAvd')
@@ -3551,7 +4096,7 @@ window.__ModuleLoader__.load({
             ref: fileInputRef,
             className: 'apkvm-fileinput',
             type: 'file',
-            accept: '.apk,.apks,.xapk,application/vnd.android.package-archive,application/octet-stream',
+            accept: '.apk,.apks,.xapk,.aab,application/vnd.android.package-archive,application/octet-stream',
             onChange: onFileInputChange,
             'aria-label': T('upload.button'),
           }),
@@ -3733,6 +4278,89 @@ window.__ModuleLoader__.load({
               ),
               h('span', { className: 'apkvm-dim' }, T('apps.thirdParty'))
             ),
+            h(
+              'div',
+              { style: { display: 'flex', alignItems: 'center', gap: '4px', flexWrap: 'wrap' } },
+              h('input', {
+                className: 'apkvm-input',
+                type: 'text',
+                value: deepLink,
+                placeholder: T('apps.deepLinkPlaceholder'),
+                spellCheck: false,
+                disabled: !ready || Boolean(appActionBusy),
+                style: { flex: '1 1 160px', minWidth: '0' },
+                onChange: function (event) {
+                  setDeepLink(event && event.target ? String(event.target.value) : '');
+                },
+              }),
+              h(
+                'button',
+                {
+                  type: 'button',
+                  className: 'apkvm-mini',
+                  disabled: !ready || Boolean(appActionBusy) || !deepLink.trim(),
+                  onClick: function (event) {
+                    event.preventDefault();
+                    openDeepLinkAction();
+                  },
+                },
+                T('apps.openDeepLink')
+              )
+            ),
+            h(
+              'div',
+              { style: { display: 'flex', alignItems: 'center', gap: '4px', flexWrap: 'wrap' } },
+              h('input', {
+                className: 'apkvm-input',
+                type: 'text',
+                value: permissionPackage,
+                placeholder: 'package',
+                spellCheck: false,
+                disabled: !ready || Boolean(appActionBusy),
+                style: { flex: '0 1 120px', minWidth: '0' },
+                onChange: function (event) {
+                  setPermissionPackage(event && event.target ? String(event.target.value) : '');
+                },
+              }),
+              h('input', {
+                className: 'apkvm-input',
+                type: 'text',
+                value: permissionName,
+                placeholder: T('apps.permissionPlaceholder'),
+                spellCheck: false,
+                disabled: !ready || Boolean(appActionBusy),
+                style: { flex: '1 1 150px', minWidth: '0' },
+                onChange: function (event) {
+                  setPermissionName(event && event.target ? String(event.target.value) : '');
+                },
+              }),
+              h(
+                'button',
+                {
+                  type: 'button',
+                  className: 'apkvm-mini',
+                  disabled: !ready || Boolean(appActionBusy) || !permissionPackage.trim() || !permissionName.trim(),
+                  onClick: function (event) {
+                    event.preventDefault();
+                    changePermission(true);
+                  },
+                },
+                T('apps.grant')
+              ),
+              h(
+                'button',
+                {
+                  type: 'button',
+                  className: 'apkvm-mini',
+                  disabled: !ready || Boolean(appActionBusy) || !permissionPackage.trim() || !permissionName.trim(),
+                  onClick: function (event) {
+                    event.preventDefault();
+                    changePermission(false);
+                  },
+                },
+                T('apps.revoke')
+              )
+            ),
             appsError ? h('div', { className: 'apkvm-error' }, appsError) : null,
             installedApps.length
               ? h(
@@ -3748,6 +4376,19 @@ window.__ModuleLoader__.load({
                       h(
                         'span',
                         { className: 'apkvm-appactions' },
+                        h(
+                          'button',
+                          {
+                            type: 'button',
+                            className: 'apkvm-mini',
+                            disabled: !ready || Boolean(appActionBusy),
+                            onClick: function (event) {
+                              event.preventDefault();
+                              runAppAction('launch', pkg);
+                            },
+                          },
+                          T('apps.launch')
+                        ),
                         h(
                           'button',
                           {
@@ -3857,6 +4498,7 @@ window.__ModuleLoader__.load({
               onClick: toggleLiveLogcat,
             }),
             actionBtn(T('debug.crash'), { key: 'debug-crash', small: true, disabled: !ready || debugBusy, onClick: runCrashLogcat }),
+            actionBtn(T('debug.visualTest'), { key: 'debug-ui-test', small: true, disabled: !ready || debugBusy, onClick: runUiTest }),
             actionBtn(T('debug.clipboardSet'), {
               key: 'debug-clipboard-set',
               small: true,
@@ -3868,6 +4510,12 @@ window.__ModuleLoader__.load({
               small: true,
               disabled: !ready,
               onClick: getDeviceClipboard,
+            }),
+            actionBtn(T('debug.clipboardPasteHost'), {
+              key: 'debug-clipboard-paste-host',
+              small: true,
+              disabled: !ready,
+              onClick: pasteHostClipboardToDevice,
             }),
             actionBtn(T('debug.props'), { key: 'debug-props', small: true, disabled: !ready || debugBusy, onClick: runDebugInfo }),
             actionBtn(T('debug.rootAction'), { key: 'debug-root', small: true, disabled: !ready || debugBusy || rootActive, onClick: runDebugRoot }),
@@ -4235,6 +4883,57 @@ window.__ModuleLoader__.load({
             }),
             h(
               'div',
+              { style: { display: 'flex', alignItems: 'center', gap: '4px', flexWrap: 'wrap' } },
+              h('input', {
+                className: 'apkvm-input',
+                type: 'text',
+                value: harPath,
+                placeholder: T('network.harPath'),
+                spellCheck: false,
+                disabled: harBusy,
+                style: { flex: '1 1 150px', minWidth: '0' },
+                onChange: function (event) {
+                  setHarPath(event && event.target ? String(event.target.value) : '');
+                },
+              }),
+              actionBtn(harBusy ? '…' : T('network.harLoad'), {
+                key: 'har-load',
+                small: true,
+                disabled: harBusy || !harPath.trim(),
+                onClick: loadHar,
+              })
+            ),
+            harResult && harResult.summary
+              ? h(
+                  'div',
+                  { className: 'apkvm-dim' },
+                  'HAR ' +
+                    harResult.summary.total +
+                    ' · 2xx ' +
+                    (harResult.summary.statusClasses && harResult.summary.statusClasses['2xx'] ? harResult.summary.statusClasses['2xx'] : 0) +
+                    ' · 4xx ' +
+                    (harResult.summary.statusClasses && harResult.summary.statusClasses['4xx'] ? harResult.summary.statusClasses['4xx'] : 0) +
+                    ' · 5xx ' +
+                    (harResult.summary.statusClasses && harResult.summary.statusClasses['5xx'] ? harResult.summary.statusClasses['5xx'] : 0) +
+                    ' · ' +
+                    formatBytes(harResult.summary.totalBytes || 0)
+                )
+              : null,
+            harResult && Array.isArray(harResult.entries) && harResult.entries.length
+              ? h(
+                  'div',
+                  { style: { display: 'flex', flexDirection: 'column', gap: '2px', maxHeight: '130px', overflow: 'auto' } },
+                  harResult.entries.slice(0, 10).map(function (entry, index) {
+                    return h(
+                      'div',
+                      { key: 'har-entry-' + index, className: 'apkvm-dim', title: entry.curl || entry.url, style: { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } },
+                      String(entry.method || '') + ' ' + String(entry.status || '') + ' · ' + String(entry.url || '')
+                    );
+                  })
+                )
+              : null,
+            h(
+              'div',
               { style: { display: 'flex', alignItems: 'center', gap: '5px', flexWrap: 'wrap' } },
               actionBtn(T('network.applyHosts'), {
                 key: 'hosts-apply',
@@ -4384,6 +5083,71 @@ window.__ModuleLoader__.load({
           )
         );
 
+        var snapshotCard = h(
+          'details',
+          { className: 'apkvm-card apkvm-debug' },
+          h(
+            'div',
+            { className: 'apkvm-debug-summary', style: { cursor: 'default' } },
+            h('span', { className: 'apkvm-card-title' }, T('snapshots.title')),
+            h('span', { className: 'apkvm-dim', style: { marginLeft: 'auto' } }, String(snapshotNames.length))
+          ),
+          h(
+            'div',
+            { className: 'apkvm-debug-body' },
+            h(
+              'div',
+              { style: { display: 'flex', alignItems: 'center', gap: '4px', flexWrap: 'wrap' } },
+              h('input', {
+                className: 'apkvm-input',
+                type: 'text',
+                value: snapshotInput,
+                placeholder: T('snapshots.placeholder'),
+                spellCheck: false,
+                disabled: Boolean(snapshotBusy),
+                style: { flex: '1 1 120px', minWidth: '0' },
+                onChange: function (event) {
+                  setSnapshotInput(event && event.target ? String(event.target.value) : '');
+                },
+              }),
+              actionBtn(T('snapshots.save'), {
+                key: 'snapshot-save',
+                small: true,
+                disabled: !ready || Boolean(snapshotBusy) || !snapshotInput.trim(),
+                onClick: function () {
+                  snapshotAction('save', snapshotInput.trim());
+                },
+              })
+            ),
+            snapshotNames.length
+              ? snapshotNames.map(function (name) {
+                  return h(
+                    'div',
+                    { key: 'snapshot-' + name, style: { display: 'flex', alignItems: 'center', gap: '3px' } },
+                    h('span', { className: 'apkvm-dim', style: { flex: '1 1 auto', minWidth: '0', overflow: 'hidden', textOverflow: 'ellipsis' } }, name),
+                    actionBtn(T('snapshots.restore'), {
+                      key: 'snapshot-restore-' + name,
+                      small: true,
+                      disabled: Boolean(snapshotBusy) || !ready,
+                      onClick: function () {
+                        snapshotAction('load', name);
+                      },
+                    }),
+                    actionBtn(T('snapshots.delete'), {
+                      key: 'snapshot-delete-' + name,
+                      small: true,
+                      variant: 'danger',
+                      disabled: Boolean(snapshotBusy),
+                      onClick: function () {
+                        snapshotAction('delete', name);
+                      },
+                    })
+                  );
+                })
+              : h('div', { className: 'apkvm-dim' }, T('snapshots.empty'))
+          )
+        );
+
         var primaryAction =
           ready || busyState
             ? actionBtn(vmBusy ? T('action.stopping') : T('action.stop'), {
@@ -4495,6 +5259,16 @@ window.__ModuleLoader__.load({
                 onClick: destroyActiveInstance,
               })
             : null,
+          instancesList.length > 1
+            ? actionBtn(T('grid.title'), {
+                key: 'grid-view',
+                small: true,
+                onClick: function () {
+                  setGridTick(Date.now());
+                  setGridOpen(true);
+                },
+              })
+            : null,
           h(
             'span',
             {
@@ -4515,7 +5289,48 @@ window.__ModuleLoader__.load({
               ' · ' +
               (videoMode === 'h264' ? T('fps.mode.h264') : T('fps.mode.png'))
           ),
+          h264Status
+            ? h(
+                'select',
+                {
+                  className: 'apkvm-quality',
+                  value: streamQualityValue,
+                  title: T('stream.quality'),
+                  disabled: !ready || Boolean(qualityBusy) || activeInstance !== 'default' || h264Status.enabled === false,
+                  onChange: function (event) {
+                    applyStreamQuality(event && event.target ? String(event.target.value) : '');
+                  },
+                },
+                ['low', 'balanced', 'high'].map(function (name) {
+                  return h('option', { key: name, value: name }, T('stream.quality.' + name));
+                }),
+                streamPreset === 'custom' ? h('option', { key: 'custom', value: 'custom', disabled: true }, T('stream.quality.custom')) : null
+              )
+            : null,
           primaryAction,
+          embedded
+            ? actionBtn(T(toolsOpen ? 'action.hideTools' : 'action.tools'), {
+                key: 'tools',
+                small: true,
+                onClick: toggleTools,
+              })
+            : null,
+          actionBtn(T(isFloating ? 'action.dock' : 'action.float'), {
+            key: 'float-window',
+            small: true,
+            onClick: function () {
+              setIsFloating(function (value) {
+                return !value;
+              });
+            },
+          }),
+          actionBtn(T(isMaximized ? 'action.restore' : 'action.expand'), {
+            key: 'maximize',
+            small: true,
+            icon: h('span', { 'aria-hidden': 'true', style: { fontSize: '14px', lineHeight: '14px' } }, '⛶'),
+            ariaLabel: T(isMaximized ? 'action.restore' : 'action.expand'),
+            onClick: toggleMaximized,
+          }),
           !embedded && sidebarService
             ? actionBtn(T('action.openSidebar'), {
                 key: 'open-sidebar',
@@ -4549,6 +5364,19 @@ window.__ModuleLoader__.load({
                 },
                 '×'
               )
+            )
+          : null;
+
+        var versionBanner = versionMismatch
+          ? h(
+              'div',
+              { className: 'apkvm-banner error apkvm-version-banner', role: 'alert' },
+              h('span', { className: 'apkvm-banner-text' }, T('version.mismatch', { client: CLIENT_VERSION, host: hostVersion })),
+              actionBtn(T('version.reload'), {
+                key: 'version-reload',
+                small: true,
+                onClick: reloadUi,
+              })
             )
           : null;
 
@@ -4610,6 +5438,13 @@ window.__ModuleLoader__.load({
             onKeyDown: onScreenKeyDown,
             onContextMenu: onContextMenu,
             onDragStart: onContextMenu,
+            onDoubleClick: function (event) {
+              if (event) {
+                event.preventDefault();
+                event.stopPropagation();
+              }
+              toggleMaximized();
+            },
           },
           frameUrl && videoMode !== 'h264'
             ? h('img', { className: 'apkvm-frame', src: frameUrl, alt: T('screen.alt'), draggable: false })
@@ -4655,6 +5490,12 @@ window.__ModuleLoader__.load({
               disabled: !ready,
               onClick: downloadScreenshot,
             }),
+            actionBtn(T('debug.rotate'), {
+              key: 'quick-rotate',
+              small: true,
+              disabled: !ready || debugBusy,
+              onClick: runDebugRotate,
+            }),
             actionBtn(inspectMode ? T('inspect.close') : T('inspect.toggle'), {
               key: 'inspect-toggle',
               small: true,
@@ -4686,6 +5527,9 @@ window.__ModuleLoader__.load({
             )
           ),
           h('div', { className: 'apkvm-stagehint' }, T('screen.hint')),
+          !ready && (displayState === 'starting' || displayState === 'booting')
+            ? h('div', { className: 'apkvm-stagehint' }, T('stage.firstBoot'))
+            : null,
           ready && videoMode !== 'h264' && clientReport && clientReport.h264Supported === false
             ? h('div', { className: 'apkvm-stagehint' }, T('fps.fallbackHint'))
             : null,
@@ -4697,7 +5541,13 @@ window.__ModuleLoader__.load({
         return h(
           'div',
           {
-            className: 'apkvm-page' + (embedded ? ' apkvm-embedded' : ''),
+            className:
+              'apkvm-page' +
+              (embedded ? ' apkvm-embedded' : '') +
+              (isMaximized ? ' apkvm-maximized' : '') +
+              (isFloating ? ' apkvm-floating' : '') +
+              (embedded && !toolsOpen ? ' apkvm-tools-collapsed' : ''),
+            ref: pageRef,
             onDragEnter: onPageDragEnter,
             onDragOver: onPageDragOver,
             onDragLeave: onPageDragLeave,
@@ -4705,6 +5555,20 @@ window.__ModuleLoader__.load({
           },
           h('style', { key: 'apkvm-style' }, CSS_TEXT),
           headerEl,
+          isMaximized
+            ? h(
+                'button',
+                {
+                  type: 'button',
+                  className: 'apkvm-max-close',
+                  onClick: toggleMaximized,
+                  'aria-label': T('action.restore'),
+                  title: T('action.restore'),
+                },
+                '✕ ' + T('action.restore')
+              )
+            : null,
+          versionBanner,
           stateErrorBanner,
           toastBanner,
           h(
@@ -4720,6 +5584,7 @@ window.__ModuleLoader__.load({
               flowCard,
               networkCard,
               storageCard,
+              snapshotCard,
               appsCard,
               diagCard,
               h('div', { className: 'apkvm-footnote', title: T('hint.boot') }, T('hint.short')),
@@ -4733,6 +5598,54 @@ window.__ModuleLoader__.load({
                 { className: 'apkvm-drop-overlay' },
                 h('span', null, T('upload.drop')),
                 h('span', { className: 'apkvm-dim' }, T('upload.detail'))
+              )
+            : null,
+          gridOpen
+            ? h(
+                'div',
+                { className: 'apkvm-grid-overlay' },
+                h(
+                  'div',
+                  { className: 'apkvm-grid-head' },
+                  h('span', { className: 'apkvm-card-title' }, T('grid.title')),
+                  h('span', { className: 'apkvm-dim' }, instancesList.length + ' VM'),
+                  h('span', { className: 'apkvm-spacer' }),
+                  actionBtn(T('grid.close'), {
+                    key: 'grid-close',
+                    small: true,
+                    onClick: function () {
+                      setGridOpen(false);
+                    },
+                  })
+                ),
+                h(
+                  'div',
+                  { className: 'apkvm-grid' },
+                  instancesList.map(function (entry) {
+                    var isReady = entry.state === 'ready';
+                    return h(
+                      'button',
+                      {
+                        type: 'button',
+                        className: 'apkvm-grid-card',
+                        key: 'grid-' + entry.id,
+                        onClick: function () {
+                          setActiveInstanceId(entry.id);
+                          setGridOpen(false);
+                        },
+                      },
+                      isReady
+                        ? h('img', { src: instanceFrameSrc(entry.id), alt: entry.avdName || entry.id })
+                        : h('div', { className: 'apkvm-dim' }, entry.state || 'stopped'),
+                      h(
+                        'span',
+                        { className: 'apkvm-grid-meta' },
+                        h('span', { className: 'apkvm-appname' }, entry.avdName || entry.id),
+                        h('span', { className: 'apkvm-dim' }, entry.state || '')
+                      )
+                    );
+                  })
+                )
               )
             : null
         );

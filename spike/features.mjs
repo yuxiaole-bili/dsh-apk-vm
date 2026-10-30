@@ -221,5 +221,76 @@ await check('Network config validates hosts/DNS/mode and pcap paths', async () =
   assert.throws(() => vm.setTcpdumpPath('C:\\temp\\capture.txt'), /\.pcap/);
 });
 
+await check('APK quick actions validate deep links and permission names', async () => {
+  const { AndroidVm } = await import('../lib/android.js');
+  const vm = new AndroidVm();
+  await assert.rejects(() => vm.openUrl('javascript:alert(1)'), /scheme/);
+  await assert.rejects(() => vm.setPermission('bad package', 'android.permission.CAMERA'), /invalid package/);
+  await assert.rejects(() => vm.setPermission('com.example.app', 'bad permission'), /invalid permission/);
+});
+
+await check('HAR, UI baseline and AAB helpers handle bounded inputs', async () => {
+  const har = await import('../lib/har.js');
+  const uiTests = await import('../lib/ui-tests.js');
+  const aab = await import('../lib/aab.js');
+  const harText = JSON.stringify({
+    log: {
+      creator: { name: 'test' },
+      entries: [
+        {
+          startedDateTime: new Date().toISOString(),
+          time: 12,
+          request: { method: 'GET', url: 'https://api.example.test/v1/users', headers: [{ name: 'accept', value: 'application/json' }] },
+          response: { status: 200, statusText: 'OK', headers: [], content: { mimeType: 'application/json', size: 42 }, bodySize: 42 },
+        },
+        {
+          startedDateTime: new Date().toISOString(),
+          time: 55,
+          request: { method: 'POST', url: 'https://api.example.test/v1/login', headers: [] },
+          response: { status: 500, statusText: 'Error', headers: [], content: { mimeType: 'text/plain', size: 10 }, bodySize: 10 },
+        },
+      ],
+    },
+  });
+  const parsed = har.parseHar(harText);
+  assert.equal(parsed.entries.length, 2);
+  assert.equal(har.filterHar(parsed.entries, { status: 500 }).length, 1);
+  assert.match(har.toCurl(parsed.entries[0]), /^curl -X GET 'https:\/\/api\.example\.test/);
+  const summary = har.summarizeHar(parsed.entries);
+  assert.equal(summary.statusClasses['2xx'], 1);
+  assert.equal(summary.totalBytes, 52);
+
+  const xml = '<hierarchy><node text="Continue" resource-id="com.example:id/continue" class="android.widget.Button" clickable="true" bounds="[0,0][100,100]" /></hierarchy>';
+  const assertions = uiTests.runAssertions(xml, [{ text: 'continue' }, { resourceId: 'id/continue' }]);
+  assert.equal(assertions.ok, true);
+  const root = await fsp.mkdtemp(path.join(os.tmpdir(), 'dsh-apk-vm-test-'));
+  try {
+    const first = await uiTests.compareScreenshot(Buffer.from('fake-png-1'), root, 'home');
+    assert.equal(first.created, true);
+    const second = await uiTests.compareScreenshot(Buffer.from('fake-png-1'), root, 'home');
+    assert.equal(second.changed, false);
+    const third = await uiTests.compareScreenshot(Buffer.from('fake-png-2'), root, 'home');
+    assert.equal(third.changed, true);
+    const report = uiTests.createTestReport({ name: 'smoke', assertions, visual: third, durationMs: 5 });
+    assert.match(uiTests.reportMarkdown(report), /smoke/);
+  } finally {
+    await fsp.rm(root, { recursive: true, force: true });
+  }
+
+  const aabRoot = await fsp.mkdtemp(path.join(os.tmpdir(), 'dsh-aab-test-'));
+  try {
+    const jar = path.join(aabRoot, 'bundletool.jar');
+    const bundle = path.join(aabRoot, 'app.aab');
+    await fsp.writeFile(jar, 'fake jar');
+    await fsp.writeFile(bundle, Buffer.from('PK\x03\x04'));
+    assert.equal(aab.detectBundletool({ bundletoolPath: jar }).available, true);
+    const info = await aab.aabInfo(bundle);
+    assert.equal(info.ok, true);
+    assert.equal(info.name, 'app.aab');
+  } finally {
+    await fsp.rm(aabRoot, { recursive: true, force: true });
+  }
+});
+
 console.log(`\n--- summary ---\nchecks: ${checks}, failed: ${failed}`);
 if (failed) process.exitCode = 1;

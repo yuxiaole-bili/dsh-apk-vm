@@ -14,7 +14,7 @@
  * and the open-source framework choices are documented in README.md / DESIGN.md.
  */
 import { randomUUID } from 'node:crypto';
-import { createReadStream, existsSync } from 'node:fs';
+import { createReadStream, existsSync, readFileSync } from 'node:fs';
 import { promises as fsp } from 'node:fs';
 import net from 'node:net';
 import os from 'node:os';
@@ -29,6 +29,17 @@ import { acceptWebSocket } from './lib/ws.js';
 import { parseUiHierarchy, decorateUiNodes, buildInspectorPayload } from './lib/ui-inspector.js';
 import { FlowRecorder } from './lib/flows.js';
 import { collectStorage, cleanTempFiles, cleanSnapshots, cleanOrphanAvds, formatBytes } from './lib/storage.js';
+import { buildApksFromAab, aabInfo, detectBundletool } from './lib/aab.js';
+import { readHarFile, summarizeHar, filterHar, toCurl } from './lib/har.js';
+import { runAssertions, compareScreenshot, createTestReport, reportMarkdown } from './lib/ui-tests.js';
+
+const PLUGIN_VERSION = (() => {
+  try {
+    return JSON.parse(readFileSync(new URL('./package.json', import.meta.url), 'utf8')).version || 'unknown';
+  } catch {
+    return 'unknown';
+  }
+})();
 
 export const name = 'dsh-apk-vm';
 
@@ -318,6 +329,42 @@ export function apply(ctx, config = {}) {
     maxFps: Math.min(60, Math.max(1, Number(cfg.scrcpyMaxFps) || 60)),
     port: Number(cfg.scrcpyPort) || 27183,
   };
+  const STREAM_PRESETS = Object.freeze({
+    low: { maxSize: 540, bitrate: 2_500_000, maxFps: 30 },
+    balanced: { maxSize: 720, bitrate: 4_000_000, maxFps: 60 },
+    high: { maxSize: 960, bitrate: 6_000_000, maxFps: 60 },
+  });
+  let streamPreset = 'custom';
+  for (const [name, preset] of Object.entries(STREAM_PRESETS)) {
+    if (
+      preset.maxSize === scrcpyConfig.maxSize &&
+      preset.bitrate === scrcpyConfig.bitrate &&
+      preset.maxFps === scrcpyConfig.maxFps
+    ) {
+      streamPreset = name;
+      break;
+    }
+  }
+
+  async function setStreamQuality(preset) {
+    const name = String(preset || '').toLowerCase();
+    const config = STREAM_PRESETS[name];
+    if (!config) throw new Error(`unknown stream preset: ${preset || '(missing)'}`);
+    scrcpyConfig.maxSize = config.maxSize;
+    scrcpyConfig.bitrate = config.bitrate;
+    scrcpyConfig.maxFps = config.maxFps;
+    streamPreset = name;
+    const wasActive = Boolean(scrcpyState && scrcpyState.session && scrcpyState.session.state === 'running');
+    if (wasActive) await stopScrcpy();
+    return {
+      ok: true,
+      preset: name,
+      maxSize: config.maxSize,
+      bitrate: config.bitrate,
+      maxFps: config.maxFps,
+      restarted: wasActive,
+    };
+  }
   let scrcpyState = null;
   let scrcpyIdleTimer = null;
   let scrcpyInitClients = null; // WeakSet of clients that already got the init JSON
@@ -427,6 +474,9 @@ export function apply(ctx, config = {}) {
       clients: st ? st.clients.size : 0,
       fps: st ? st.fps : 0,
       maxFps: scrcpyConfig.maxFps,
+      maxSize: scrcpyConfig.maxSize,
+      bitrate: scrcpyConfig.bitrate,
+      preset: streamPreset,
       width: st && st.dims ? st.dims.width : null,
       height: st && st.dims ? st.dims.height : null,
       error: st && st.lastError ? String(st.lastError.message || st.lastError) : null,
@@ -612,11 +662,22 @@ export function apply(ctx, config = {}) {
     let apkPath;
     if (options.trustedPath === true) {
       apkPath = path.resolve(String(candidate || ''));
-      if (!/\.(?:apk|apks|xapk)$/i.test(apkPath) || !existsSync(apkPath)) {
+      if (!/\.(?:apk|apks|xapk|aab)$/i.test(apkPath) || !existsSync(apkPath)) {
         throw new Error(`uploaded APK/bundle is missing or invalid: ${apkPath}`);
       }
     } else {
       apkPath = resolveApkPath(candidate, rootsFor());
+    }
+    if (/\.aab$/i.test(apkPath)) {
+      const built = await buildApksFromAab({
+        aabPath: apkPath,
+        outDir: path.join(os.tmpdir(), 'dsh-apk-vm-aab'),
+        mode: 'universal',
+        bundletoolPath: options.bundletoolPath,
+        javaPath: options.javaPath,
+      });
+      if (!built.ok) throw new Error(built.error || 'AAB conversion failed; install bundletool and retry');
+      apkPath = built.apksPath;
     }
     const status = await vm.status();
     if (!isReady(status)) throw new Error(`VM is not ready (state: ${status.state}); start it first`);
@@ -747,6 +808,7 @@ export function apply(ctx, config = {}) {
     maybeAutoStart(status);
     return {
       ok: true,
+      pluginVersion: PLUGIN_VERSION,
       vm: {
         state: status.state,
         serial: status.serial || null,
@@ -980,7 +1042,7 @@ export function apply(ctx, config = {}) {
         return;
       }
       if (action === 'install-image') {
-        if (cfg.allowSetupDownloads !== true) {
+        if (cfg.allowSetupDownloads !== true && body.confirmDownload !== true) {
           sendError(res, 403, 'downloading Android system images is disabled; set allowSetupDownloads: true to enable it');
           return;
         }
@@ -994,7 +1056,7 @@ export function apply(ctx, config = {}) {
         return;
       }
       if (action === 'install-tools') {
-        if (cfg.allowSetupDownloads !== true) {
+        if (cfg.allowSetupDownloads !== true && body.confirmDownload !== true) {
           sendError(res, 403, 'downloading Android SDK components is disabled; set allowSetupDownloads: true to enable it');
           return;
         }
@@ -1013,7 +1075,7 @@ export function apply(ctx, config = {}) {
         return;
       }
       if (action === 'bootstrap-sdk') {
-        if (cfg.allowSetupDownloads !== true) {
+        if (cfg.allowSetupDownloads !== true && body.confirmDownload !== true) {
           sendError(res, 403, 'downloading Android SDK components is disabled; set allowSetupDownloads: true to enable it');
           return;
         }
@@ -1127,6 +1189,7 @@ export function apply(ctx, config = {}) {
         }
         return {
           ok: true,
+          pluginVersion: PLUGIN_VERSION,
           instance: { id: instance.id, kind: 'extra', avdName: instance.avdName, port: instance.port },
           vm: {
             state: status.state,
@@ -1224,6 +1287,27 @@ export function apply(ctx, config = {}) {
         });
         return;
       }
+      if (rest === 'snapshots') {
+        if (req.method === 'GET') {
+          sendJson(res, 200, instance.vm.listNamedSnapshots());
+          return;
+        }
+        if (req.method !== 'POST') {
+          sendError(res, 405, 'GET or POST only');
+          return;
+        }
+        const body = await readJsonBody(req);
+        const action = String(body.action || '').toLowerCase();
+        try {
+          if (action === 'save') sendJson(res, 200, await instance.vm.saveNamedSnapshot(body.name));
+          else if (action === 'load') sendJson(res, 200, await instance.vm.loadNamedSnapshot(body.name));
+          else if (action === 'delete') sendJson(res, 200, await instance.vm.deleteNamedSnapshot(body.name));
+          else throw new Error(`unsupported snapshot action: ${action || '(missing)'}`);
+        } catch (error) {
+          sendError(res, 400, error.message);
+        }
+        return;
+      }
       if (rest === 'network') {
         if (!(await ready())) return;
         if (req.method === 'GET') {
@@ -1318,7 +1402,7 @@ export function apply(ctx, config = {}) {
           name = 'upload.apk';
         }
         name = path.basename(name).replace(/[^A-Za-z0-9._-]+/g, '_') || 'upload.apk';
-        if (!/\.apk$/i.test(name)) name += '.apk';
+        if (!/\.(?:apk|aab)$/i.test(name)) name += '.apk';
         const data = await readRawBody(req, UPLOAD_LIMIT_BYTES);
         if (data.length < 4 || data[0] !== 0x50 || data[1] !== 0x4b) {
           sendError(res, 400, 'uploaded file is not a ZIP/APK');
@@ -1443,6 +1527,10 @@ export function apply(ctx, config = {}) {
           if (action === 'force-stop') result = await instance.forceStop(body.packageName);
           else if (action === 'clear-data') result = await instance.clearData(body.packageName);
           else if (action === 'uninstall') result = await instance.uninstall(body.packageName);
+          else if (action === 'launch') result = await instance.vm.launchPackage(body.packageName, body.activity);
+          else if (action === 'open-url') result = await instance.vm.openUrl(body.url);
+          else if (action === 'grant') result = await instance.vm.setPermission(body.packageName, body.permission, true);
+          else if (action === 'revoke') result = await instance.vm.setPermission(body.packageName, body.permission, false);
           else {
             sendError(res, 400, `unsupported debug action: ${action || '(missing)'}`);
             return;
@@ -1509,6 +1597,7 @@ export function apply(ctx, config = {}) {
         'flows',
         'network',
         'network/pcap',
+        'snapshots',
       ];
       const disposers = [];
       for (const suffix of suffixes) {
@@ -1781,7 +1870,7 @@ export function apply(ctx, config = {}) {
       }
       let safeName = path.basename(rawName || 'upload.apk').replace(/[^A-Za-z0-9._-]+/g, '_');
       if (!safeName) safeName = 'upload.apk';
-      if (!/\.(?:apk|apks|xapk)$/i.test(safeName)) safeName += '.apk';
+      if (!/\.(?:apk|apks|xapk|aab)$/i.test(safeName)) safeName += '.apk';
       let data;
       try {
         data = await readRawBody(req, UPLOAD_LIMIT_BYTES);
@@ -1930,6 +2019,19 @@ export function apply(ctx, config = {}) {
       sendJson(res, 200, { ok: true, fps: streamFps });
     });
 
+    register('/apk-vm/stream/quality', async (req, res) => {
+      if (req.method !== 'POST') {
+        sendError(res, 405, 'POST only');
+        return;
+      }
+      const body = await readJsonBody(req);
+      try {
+        sendJson(res, 200, await setStreamQuality(body.preset));
+      } catch (error) {
+        sendError(res, 400, error.message);
+      }
+    });
+
     /* ---- rooted debug surface ---------------------------------------- *
      * These routes (and the `apk_vm` Agent tool) expose the guest's root
      * shell and low-level device operations to DSH. They are local-only,
@@ -2000,6 +2102,43 @@ export function apply(ctx, config = {}) {
       sendError(res, 405, 'GET or POST only');
     });
 
+    register('/apk-vm/ui-test', async (req, res) => {
+      if (req.method !== 'POST') {
+        sendError(res, 405, 'POST only');
+        return;
+      }
+      if (!(await ensureDebugReady(res))) return;
+      const body = await readJsonBody(req);
+      const name = String(body.name || 'ui-check').slice(0, 80);
+      const started = Date.now();
+      try {
+        const dump = await vm.uiDump();
+        const assertions = runAssertions(dump.xml, Array.isArray(body.assertions) ? body.assertions : []);
+        const png = await vm.screenshot();
+        const visual = await compareScreenshot(
+          png,
+          path.join(os.tmpdir(), 'dsh-apk-vm-baselines'),
+          name,
+          { update: body.updateBaseline === true },
+        );
+        const report = createTestReport({
+          name,
+          instanceId: 'default',
+          assertions,
+          visual,
+          durationMs: Date.now() - started,
+        });
+        const reportBody = report && report.report ? report.report : report;
+        sendJson(res, 200, {
+          ok: assertions.ok !== false && visual.ok !== false,
+          report: reportBody,
+          markdown: (report && report.markdown) || reportMarkdown(reportBody),
+        });
+      } catch (error) {
+        sendError(res, 400, error.message);
+      }
+    });
+
     register('/apk-vm/debug/packages', async (req, res) => {
       if (req.method !== 'GET') {
         sendError(res, 405, 'GET only');
@@ -2065,11 +2204,36 @@ export function apply(ctx, config = {}) {
       if (action === 'force-stop') result = await vm.forceStop(packageName);
       else if (action === 'clear-data') result = await vm.clearData(packageName);
       else if (action === 'uninstall') result = await vm.uninstall(packageName);
+      else if (action === 'launch') result = await vm.launchPackage(packageName, body.activity);
+      else if (action === 'open-url') result = await vm.openUrl(body.url);
+      else if (action === 'grant') result = await vm.setPermission(packageName, body.permission, true);
+      else if (action === 'revoke') result = await vm.setPermission(packageName, body.permission, false);
       else {
         sendError(res, 400, `unsupported debug action: ${action || '(missing)'}`);
         return;
       }
       sendJson(res, 200, { ok: result.ok === true, action, result });
+    });
+
+    register('/apk-vm/snapshots', async (req, res) => {
+      if (req.method === 'GET') {
+        sendJson(res, 200, vm.listNamedSnapshots());
+        return;
+      }
+      if (req.method !== 'POST') {
+        sendError(res, 405, 'GET or POST only');
+        return;
+      }
+      const body = await readJsonBody(req);
+      const action = String(body.action || '').toLowerCase();
+      try {
+        if (action === 'save') sendJson(res, 200, await vm.saveNamedSnapshot(body.name));
+        else if (action === 'load') sendJson(res, 200, await vm.loadNamedSnapshot(body.name));
+        else if (action === 'delete') sendJson(res, 200, await vm.deleteNamedSnapshot(body.name));
+        else throw new Error(`unsupported snapshot action: ${action || '(missing)'}`);
+      } catch (error) {
+        sendError(res, 400, error.message);
+      }
     });
 
     register('/apk-vm/debug/rotate', async (req, res) => {
@@ -2138,6 +2302,37 @@ export function apply(ctx, config = {}) {
       try {
         const body = await readJsonBody(req);
         sendJson(res, 200, await vm.installCaCertificate(body.path));
+      } catch (error) {
+        sendError(res, 400, error.message);
+      }
+    });
+
+    register('/apk-vm/network/har', async (req, res) => {
+      if (req.method !== 'POST') {
+        sendError(res, 405, 'POST only');
+        return;
+      }
+      const body = await readJsonBody(req);
+      try {
+        const loaded = await readHarFile(body.path);
+        const entries = filterHar(loaded.entries, {
+          method: body.method,
+          status: body.status,
+          domain: body.domain,
+          search: body.search,
+        });
+        const sliced = entries.slice(0, 500).map((entry) => ({
+          ...entry,
+          curl: toCurl(entry),
+        }));
+        sendJson(res, 200, {
+          ok: true,
+          path: loaded.file,
+          bytes: loaded.bytes,
+          summary: summarizeHar(loaded.entries),
+          filtered: entries.length,
+          entries: sliced,
+        });
       } catch (error) {
         sendError(res, 400, error.message);
       }

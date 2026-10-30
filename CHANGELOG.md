@@ -1,5 +1,71 @@
 # Changelog
 
+## 0.8.0
+
+Sidebar workspace, APK debugging, network and regression tools.
+
+### Added
+
+- **Collapsible tools aside**, **expand/full-window**, **in-app floating VM window**, remembered
+  expand state, double-click expand, keyboard `Esc` restore and a dedicated close button.
+- **Multi-instance grid** with frame thumbnails and one-click instance switching.
+- **Stream quality presets** (540p/30, 720p/60, 960p/60) that restart only the scrcpy session,
+  a quick rotate control, first-boot hint, and stale-client/version warning.
+- **One-click environment setup** for SDK tools, system image and AVD creation with explicit
+  download confirmation; single-step setup actions remain available.
+- **APK quick actions**: launch installed app, validated deep links, grant/revoke permissions,
+  plus existing stop/clear-data/uninstall. `.aab` uploads convert through bundletool when available.
+- **Named VM snapshots**: save, restore and delete per-AVD snapshots.
+- **Passive clipboard**: explicit “copy device clipboard to host” and “paste host clipboard to
+  device” actions; no polling, listeners or background sync.
+- **HAR network panel**: load a HAR exported by an external proxy/DevTools, summarize status
+  classes/bytes/domains and inspect up to 500 requests with bounded fields.
+- **UI check/visual baseline**: run UIAutomator assertions and SHA-256 screenshot baselines,
+  return a JSON/Markdown report, and copy a `curl` for HAR entries.
+- **Remote adb host:port input** for attached network devices.
+
+### Notes
+
+- AAB conversion requires `bundletool` (executable, `BUNDLETOOL_JAR`, or a jar in the repo/tools dir).
+- Visual regression is exact-byte baseline comparison; it does not ship a pixel-diff image library.
+- Clipboard remains passive by design; there is no automatic sync.
+
+## 0.7.0
+
+Sidebar usability and streaming controls.
+
+### Added
+
+- **Expand / restore button** in the VM panel header. It turns the panel into a
+  full-window overlay so a narrow `dsh-better-sidebar` tab can show a large phone screen;
+  press Escape or click the button again to restore the sidebar layout. The last state is
+  remembered, double-clicking the phone toggles it, and the overlay has a dedicated close button.
+- **Collapsible tools aside** in the embedded sidebar: APK/debug cards are hidden by default
+  so the phone gets the available height; a Tools button reveals them.
+- **Stream quality presets** — Low 540p/30, Balanced 720p/60, High 960p/60. Changing the
+  preset restarts only the scrcpy session and lets the panel reconnect.
+- Quick **rotate** and **first-boot hint** in the stage controls.
+- **Version and stale-UI warning** — the header shows the client version, and a
+  client/host version mismatch offers a Reload UI action.
+- **APK quick actions** — launch an installed app, open a validated deep link, grant/revoke a
+  permission, plus the existing stop/clear/uninstall controls.
+- **One-click environment setup** — an explicit button chains SDK tools, system image,
+  AVD creation and VM start; the click confirms downloads even when global auto-download is off.
+- **Passive clipboard** — host clipboard is read/written only when the user clicks
+  “paste host clipboard” or “copy device clipboard”. No polling or background sync.
+
+## 0.6.2
+
+Sidebar usability.
+
+### Added
+
+- **Expand / restore button** in the VM panel header. It turns the panel into a
+  full-window overlay so a narrow `dsh-better-sidebar` tab can show a large phone screen;
+  press Escape or click the button again to restore the sidebar layout.
+- The overlay hides the APK/debug aside, keeps the H.264 stream and input controls, and
+  reuses the existing canvas/WebSocket session (no second stream).
+
 ## 0.6.1
 
 Network panel completeness.

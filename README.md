@@ -26,6 +26,8 @@
 - **Real, low-latency stream** — H.264/WebCodecs up to 60 fps with tap, swipe, key and text input.
 - **Agent-native** — `apk_vm` tools, a live UI Inspector, copy-ready selectors and record/replay flows.
 - **Local and inspectable** — open-source AOSP emulator, rooted debug API, network/storage controls, no telemetry.
+- **Expandable viewer** — turn the narrow sidebar panel into a full-window VM with one click; Escape restores it.
+- **Large-screen controls** — collapsible tools, quality presets (540p/30 → 960p/60), double-click expand, quick rotate, and a stale-UI/version warning.
 
 This repository contains the static DSH plugin `dsh-apk-vm`. It adds a first-class sidebar
 entry ("APK Virtual Machine" / "APK 虚拟机") whose main panel boots an AOSP Android Emulator,
@@ -43,7 +45,7 @@ same-origin, loopback-only debug HTTP API and an `apk_vm` Agent tool.
 > 当前 **Windows x64 与 Linux x86_64（headless）为端到端已验证平台**；macOS 仅做探测/CI
 > 覆盖，详见 `docs/LINUX-E2E.md`。
 
-**Status:** `0.6.1` · Apache-2.0 · no npm runtime dependencies · no build step.
+**Status:** `0.8.0` · Apache-2.0 · no npm runtime dependencies · no build step.
 
 This is an open-source DSH plugin published on npm as **`dsh-apk-vm`**. Repository:
 [github.com/yuxiaole-bili/dsh-apk-vm](https://github.com/yuxiaole-bili/dsh-apk-vm).
@@ -600,12 +602,16 @@ JSON bodies are bounded to 64 KiB; the raw APK upload is bounded to 500 MiB.
 | POST | `/apk-vm/device` | `{"serial":"<adb-serial>"}` attach an online physical/network device; `{"serial":""}` detach and restore the managed AVD. |
 | POST | `/apk-vm/vm` | `{"action":"start"\|"stop"\|"restart"\|"snapshot"}`. |
 | POST | `/apk-vm/install` | `{"path":"C:/path/app.apk"}` → install + launch. |
-| POST | `/apk-vm/upload` | Raw APK bytes (≤ 500 MiB) with the file name in the `x-apk-name` header → validate ZIP/APK magic, write to the OS temp dir, install + launch. |
+| POST | `/apk-vm/upload` | Raw APK/APKS/XAPK/AAB bytes (≤ 500 MiB) with the file name in the `x-apk-name` header → validate ZIP/APK magic, write to the OS temp dir, install + launch. |
 | GET | `/apk-vm/frame?t=…` | Latest PNG frame (`409` while the VM is not ready). |
 | POST | `/apk-vm/input` | `tap` / `swipe` / `key` / `text` payloads. |
 | POST | `/apk-vm/touch` | Multi-touch scrcpy control (`{"action":"down\|move\|up\|cancel","pointerId":0,"x":…,"y":…}` in video-frame coordinates) for pinch/zoom. |
-| GET/POST | `/apk-vm/clipboard` | Read the device clipboard (`GET`, scrcpy `GET_CLIPBOARD`) or write text (`POST {"text":…}`). |
+| GET/POST | `/apk-vm/clipboard` | Read the device clipboard (`GET`, scrcpy `GET_CLIPBOARD`) or write text (`POST {"text":…}`). Explicit calls only; no background clipboard sync. |
+| GET/POST | `/apk-vm/snapshots` | List named AVD snapshots; `POST {"action":"save\|load\|delete","name":…}`. |
+| POST | `/apk-vm/ui-test` | `{"name":…,"assertions":[…],"updateBaseline":false}` — UIAutomator assertions + exact-byte screenshot baseline; returns JSON and Markdown. |
+| POST | `/apk-vm/network/har` | `{"path":"…har","method"?,"status"?,"domain"?,"search"?}` — load an external proxy HAR, summarize/filter and include bounded entries + curl. |
 | POST | `/apk-vm/stream` | `{"fps":1–10}` — set the PNG fallback target frame rate. |
+| POST | `/apk-vm/stream/quality` | `{"preset":"low\|balanced\|high"}` — change H.264 resolution/bitrate/fps; the scrcpy session reconnects. |
 | GET (upgrade) | `/apk-vm/ws` | WebSocket H.264 stream (see above). |
 | GET | `/apk-vm/instances` | List default + extra VM instances, including `owner`, `lastUsedAt`, `idleMs`, `idleTimeoutMs`, `videoClients`. |
 | POST | `/apk-vm/instances` | `{"name":"agent-a","start":true}` — create an isolated AVD/VM; every extra instance has its own H.264 stream. |
