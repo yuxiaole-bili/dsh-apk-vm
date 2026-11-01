@@ -580,6 +580,11 @@ const Page = pageElement ? pageElement.type : null;
 
   check('header shows Stop while ready', !!buttonWithText(tree, 'Stop'));
   check(
+    'VM usage card shows claim/release and scope controls',
+    !!buttonWithText(tree, 'Claim') && !!buttonWithText(tree, 'Release') &&
+      lastText.indexOf('VM usage') !== -1 && lastText.indexOf('Scope') !== -1
+  );
+  check(
     'toolbar shows Home/Back/Recents/Power',
     !!buttonWithText(tree, 'Home') && !!buttonWithText(tree, 'Back') && !!buttonWithText(tree, 'Recents') && !!buttonWithText(tree, 'Power')
   );
@@ -596,6 +601,12 @@ const Page = pageElement ? pageElement.type : null;
     'Stop posts /apk-vm/vm with action=stop',
     !!vmPost && vmPost.init.method === 'POST' && String(vmPost.init.body).indexOf('"action":"stop"') !== -1,
     vmPost && String(vmPost.init.body)
+  );
+  const panelOwnerHeader = vmPost && vmPost.init.headers && vmPost.init.headers['x-apk-vm-owner'];
+  check(
+    'mutating requests carry the panel owner header',
+    typeof panelOwnerHeader === 'string' && panelOwnerHeader.indexOf('panel:') === 0,
+    panelOwnerHeader
   );
 
   /* Drive: Home key -> POST /apk-vm/input {type:'key', key:'home'} */

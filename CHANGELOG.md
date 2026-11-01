@@ -1,5 +1,62 @@
 # Changelog
 
+## 0.10.0
+
+VM ownership and dedicated conversation/project VMs.
+
+### Added
+
+- **Renewable VM owner leases** — each conversation owns the VM it drives; a second conversation
+  gets its own instance instead of silently taking over the default VM.
+- **Ownership scopes** — `shared` (first come), `conversation` (dedicated per DSH session), and
+  `project` (dedicated per workspace). Leases expire after 30 minutes and renew on `apk_vm`
+  calls that route to the VM.
+- **Conflict protection** — an explicit foreign `instance` returns `vm-busy` with the current
+  owner; `ownerForce=true` is an explicit takeover.
+- **Agent actions** — `owner_status`, `claim_vm`, `release_vm`, plus `ownerScope` / `ownerLabel`
+  on normal VM actions.
+- **HTTP API** — `GET|POST /apk-vm/ownership` (`status`, `claim`, `release`, `touch`); owner
+  metadata in `GET /apk-vm/state` and `/apk-vm/instances`.
+- **Panel display** — the VM instances card shows the current owner and ownership scope.
+- **Panel usage card** — human-readable owner label plus Claim / Release buttons and a
+  `shared` / `conversation` / `project` scope control; mutating panel HTTP requests carry
+  the matching owner headers.
+- **HTTP owner validation** — state-changing `/apk-vm/*` requests return `409 vm-busy` with
+  the current owner when their `x-apk-vm-owner` header does not match; GET routes stay open.
+  The panel also sends `x-apk-vm-scope` / `x-apk-vm-session` / `x-apk-vm-workspace` /
+  `x-apk-vm-label`, and a matching owner header auto-claims a free VM.
+- **Automatic release** — the `session/disposed` Host event releases every lease held by a
+  closed conversation, with the lease TTL as fallback.
+- **Readable labels** — `ownerLabelFor()` now shows `对话 …`, `项目 <folder>` or `共享 …`
+  instead of a raw key.
+- **Port presets** — one-click Metro 8081, HTTP 8080, Frida 27042 and DevTools 9222 forwards.
+
+## 0.9.0
+
+App-operation Skills and the Control Codebook.
+
+### Added
+
+- **App-operation Skills** — record a semantic navigation once, then replay it fast to a target
+  page for tests. Skills embed their own Control Codebook, so they keep working when UIAutomator
+  node order changes. Stored under the workspace `.apk-vm/skills/` directory.
+- **Control Codebook** — numeric (`A01`) and semantic (`LOGIN_BTN`) codes plus aliases, matched
+  by structural features (`resourceId`, `text`, `textAny`, `contentDesc`, `className`,
+  `clickable`, `enabled`, bounds ratio) with deterministic ambiguity errors.
+- **Image features** — optional PNG dHash plus average/dominant colour for icon-only controls;
+  `control_features` returns a ready-to-save entry with a human image name.
+- **Agent actions** — `skill_list/get/save/delete/start/stop/cancel/run/codebook` and
+  `control_ui/features/codebook/tap/input/long_press/swipe/assert/wait/launch`.
+- **Panel Skills card** — start/stop recording, name a target code, run or delete a Skill.
+- Pure-Node PNG decoding for the image features, so there are still no runtime dependencies.
+
+### Notes
+
+- Skills use UI automation only; arbitrary in-app function invocation is intentionally not
+  supported.
+- Runtime `snapshotId` numbers are not persisted in Skills. Codebook codes are the stable
+  interface.
+
 ## 0.8.1
 
 Remote VM over SSH.

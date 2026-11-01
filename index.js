@@ -23,11 +23,16 @@ import { fileURLToPath } from 'node:url';
 
 import { AndroidVm } from './lib/android.js';
 import { InstanceManager } from './lib/instances.js';
+import { OWNER_SCOPE, normalizeScope } from './lib/vm-ownership.js';
+import { checkOwnerAccess, ownerFromHttp } from './lib/http-owner.js';
 import { ScrcpySession, annexbToAvcc, CONTROL_MESSAGE_TYPE } from './lib/scrcpy.js';
 import { detectEnvironment, createAvd, installSystemImage, installSdkPackages, bootstrapSdk, DEFAULT_SYSTEM_IMAGE } from './lib/setup.js';
 import { acceptWebSocket } from './lib/ws.js';
-import { parseUiHierarchy, decorateUiNodes, buildInspectorPayload } from './lib/ui-inspector.js';
+import { parseUiHierarchy, decorateUiNodes, buildInspectorPayload, snapshotIdForXml } from './lib/ui-inspector.js';
 import { FlowRecorder } from './lib/flows.js';
+import { normalizeCodebook, resolveControl, suggestFeatures } from './lib/control-codebook.js';
+import { attachNodeImageFeatures } from './lib/image-features.js';
+import { SkillStore, SkillRecorder, runSkill, normalizeSkill, skillSummary } from './lib/app-skills.js';
 import { collectStorage, cleanTempFiles, cleanSnapshots, cleanOrphanAvds, formatBytes } from './lib/storage.js';
 import { buildApksFromAab, aabInfo, detectBundletool } from './lib/aab.js';
 import { readHarFile, summarizeHar, filterHar, toCurl } from './lib/har.js';
@@ -279,6 +284,7 @@ export function apply(ctx, config = {}) {
           scrcpyBitrate: cfg.scrcpyBitrate || 6_000_000,
           scrcpyMaxFps: cfg.scrcpyMaxFps || 60,
           idleTimeoutMs: cfg.instanceIdleMs || 15 * 60 * 1000,
+          leaseTtlMs: cfg.leaseTtlMs || 30 * 60 * 1000,
           dnsServers: Array.isArray(cfg.dnsServers) ? cfg.dnsServers.map(String) : undefined,
           networkMode: cfg.networkMode || undefined,
           tcpdumpPath: cfg.tcpdumpPath || undefined,
@@ -295,6 +301,22 @@ export function apply(ctx, config = {}) {
     instanceManager.onCreated = (id) => {
       registerInstanceRoutes?.(id);
     };
+    // A closed conversation must not keep the default VM claimed forever.
+    // TTL expiry is the fallback when the sessions service is unavailable.
+    ctx.inject(['sessions'], (host) => {
+      host.effect(() => {
+        if (typeof host.on !== 'function') return () => {};
+        const off = host.on('session/disposed', (session) => {
+          const id = session && (session.id || (session.header && session.header.id));
+          if (!id) return;
+          const released = instanceManager.releaseBySession(id);
+          if (released.length) vm._pushLog(`released VM lease(s) after session ${id}: ${released.map((entry) => entry.instanceId).join(', ')}`);
+        });
+        return () => {
+          if (typeof off === 'function') off();
+        };
+      }, 'dsh-apk-vm: release VM leases when a session is disposed');
+    });
   }
   let installInFlight = null;
   let remoteTunnel = null;
@@ -657,6 +679,14 @@ export function apply(ctx, config = {}) {
   }
 
   const rootsFor = () => resolveRoots(ctx, cfg.roots);
+  // Semantic App Skills live in the workspace (not the OS temp dir), so a
+  // recorded "go to checkout" recipe survives VM restarts and can be reviewed.
+  const skillStore = new SkillStore({
+    dir: cfg.skillsDir
+      ? path.resolve(String(cfg.skillsDir))
+      : path.join(rootsFor()[0] || process.cwd(), '.apk-vm', 'skills'),
+  });
+  const skillRecorder = new SkillRecorder({ store: skillStore });
   const snapshotApk = () => (lastApk ? { ...lastApk } : null);
 
   /** Resolve, install and launch one APK; shared by the HTTP route, upload and Agent tool. */
@@ -837,6 +867,7 @@ export function apply(ctx, config = {}) {
       origin: serverOrigin,
       multiInstance: Boolean(instanceManager),
       client: lastClientReport,
+      owner: instanceManager ? instanceManager.ownerInfo('default') : null,
       instances: [
         {
           id: 'default',
@@ -848,6 +879,9 @@ export function apply(ctx, config = {}) {
           root: status.root === true,
           apk: snapshotApk(),
           owner: instanceManager ? instanceManager.defaultOwner : null,
+          ownerInfo: instanceManager ? instanceManager.ownerInfo('default') : null,
+          ownerLabel: instanceManager && instanceManager.ownerInfo('default') ? instanceManager.ownerInfo('default').label : null,
+          scope: instanceManager && instanceManager.ownerInfo('default') ? instanceManager.ownerInfo('default').scope : null,
           lastUsedAt: null,
           idleMs: null,
           videoClients: null,
@@ -876,12 +910,94 @@ export function apply(ctx, config = {}) {
         sendError(res, 500, error && error.message ? error.message : error);
       }
     };
+    // HTTP callers identify themselves with x-apk-vm-owner/scope/session/
+    // workspace/label headers (query parameters are accepted too). A POST that
+    // controls a running VM must match the current lease; reads stay read-only.
+    const OWNER_GUARDED_POST_PATHS = new Set([
+      '/apk-vm/controls',
+      '/apk-vm/skills',
+      '/apk-vm/flows',
+      '/apk-vm/input',
+      '/apk-vm/touch',
+      '/apk-vm/clipboard',
+      '/apk-vm/vm',
+      '/apk-vm/device',
+      '/apk-vm/remote',
+      '/apk-vm/install',
+      '/apk-vm/upload',
+      '/apk-vm/stream',
+      '/apk-vm/stream/quality',
+      '/apk-vm/ui-test',
+      '/apk-vm/snapshots',
+      '/apk-vm/network',
+      '/apk-vm/network/har',
+      '/apk-vm/debug/shell',
+      '/apk-vm/debug/prop',
+      '/apk-vm/debug/push',
+      '/apk-vm/debug/pull',
+      '/apk-vm/debug/reboot',
+      '/apk-vm/debug/action',
+      '/apk-vm/debug/rotate',
+      '/apk-vm/debug/proxy',
+      '/apk-vm/debug/ca',
+      '/apk-vm/debug/record',
+    ]);
+
+    function requestQuery(req) {
+      try {
+        return new URL(String(req.url || '/'), 'http://apk-vm.local').searchParams;
+      } catch {
+        return new URLSearchParams();
+      }
+    }
+
+    function httpOwnerFromRequest(req) {
+      const values = ownerFromHttp(req.headers || {}, requestQuery(req));
+      return values ? instanceManager.ownerFor(values) : null;
+    }
+
+    function assertHttpOwner(req, res, instanceId = 'default') {
+      if (!instanceManager) return true;
+      const lease = instanceManager.ownerInfo(instanceId);
+      const incoming = httpOwnerFromRequest(req);
+      const access = checkOwnerAccess(lease, incoming, instanceId);
+      if (!access.ok) {
+        sendJson(res, access.status || 409, {
+          ok: false,
+          error: access.error,
+          code: access.code || 'vm-busy',
+          owner: access.owner || lease,
+        });
+        return false;
+      }
+      if (access.autoClaim) {
+        try {
+          instanceManager.claimOwner(instanceId, incoming);
+        } catch (error) {
+          sendJson(res, error.status === 409 ? 409 : 400, {
+            ok: false,
+            error: error.message,
+            code: error.code || null,
+            owner: error.owner || null,
+          });
+          return false;
+        }
+      }
+      if (access.touch) instanceManager.touchOwner(instanceId, incoming.key);
+      return true;
+    }
+
     const register = (pathname, handler) => {
       disposers.push(
         webServer.register({
           kind: 'exact',
           path: pathname,
-          handler: wrapHandler(handler),
+          handler: wrapHandler(async (req, res) => {
+            if (req.method === 'POST' && OWNER_GUARDED_POST_PATHS.has(pathname) && !assertHttpOwner(req, res, 'default')) {
+              return;
+            }
+            await handler(req, res);
+          }),
         }),
       );
     };
@@ -931,12 +1047,332 @@ export function apply(ctx, config = {}) {
       }
     }
 
+    function activeSkill(instanceId) {
+      return skillRecorder.active(instanceId);
+    }
+
+    function codebookForRequest(instanceId, supplied) {
+      const active = activeSkill(instanceId);
+      if (active) return active.skill.codebook;
+      if (supplied) return normalizeCodebook(supplied);
+      throw new Error('no codebook: start a Skill recording first or pass codebook');
+    }
+
+    async function resolveControlOnDevice(api, codebook, code, options = {}) {
+      const value = String(code || '').trim();
+      if (!value) throw new Error('control code is required');
+      const dump = await api.uiDump();
+      const parsed = parseUiHierarchy(dump.xml);
+      const wantsImage = options.withImage === true
+        || (codebook.entries || []).some((entry) => entry.features && entry.features.image);
+      if (wantsImage && typeof api.screenshotBuffer === 'function') {
+        try {
+          attachNodeImageFeatures(await api.screenshotBuffer(), parsed.nodes);
+        } catch {
+          // Image matching will report a clear "no screenshot image features" error.
+        }
+      }
+      let screen = null;
+      try {
+        screen = await api.screenSize();
+      } catch {
+        screen = null;
+      }
+      const result = resolveControl(codebook, value, parsed.nodes, { screen });
+      if (!result.node || !result.node.bounds || !result.node.bounds.center) {
+        throw new Error(`control ${value} has no usable bounds on the current screen`);
+      }
+      return { ...result, snapshotId: snapshotIdForXml(dump.xml), screen };
+    }
+
+    function recordControlStep(instanceId, step, body) {
+      if (body && body.record === false) return false;
+      if (!activeSkill(instanceId)) return false;
+      skillRecorder.add(instanceId, step);
+      return true;
+    }
+
+    async function handleControlRequest(req, res, instanceId, apiFactory) {
+      if (req.method !== 'POST') {
+        sendError(res, 405, 'POST only');
+        return;
+      }
+      const body = await readJsonBody(req);
+      const action = String(body.action || '').toLowerCase().replace(/-/g, '_');
+      const api = apiFactory();
+      try {
+        await ensureToolApiReady(api, 'control');
+        if (action === 'ui') {
+          const inspector = buildInspectorPayload(await api.uiDump(), await api.screenSize().catch(() => null));
+          sendJson(res, 200, { ok: true, ...inspector });
+          return;
+        }
+        if (action === 'codebook') {
+          const active = activeSkill(instanceId);
+          if (active) {
+            const codebook = await skillRecorder.updateCodebook(instanceId, body.codebook || {});
+            sendJson(res, 200, { ok: true, codebook, recording: true });
+            return;
+          }
+          const skillId = String(body.skillId || body.id || '').trim();
+          if (!skillId) throw new Error('no active recording; codebook needs skillId');
+          const skill = await skillStore.get(skillId);
+          if (!skill) throw new Error(`unknown Skill: ${skillId}`);
+          skill.codebook = normalizeCodebook(body.codebook || {});
+          const saved = await skillStore.save(skill);
+          sendJson(res, 200, { ok: true, skill: skillSummary(saved), codebook: saved.codebook });
+          return;
+        }
+        if (action === 'launch') {
+          const pkg = String(body.packageName || body.package || '').trim();
+          if (!pkg) throw new Error('control launch requires package');
+          const result = await api.launchPackage(pkg);
+          recordControlStep(instanceId, { action: 'launch', package: pkg }, body);
+          sendJson(res, 200, { ok: true, action, package: pkg, result, recorded: Boolean(activeSkill(instanceId)) });
+          return;
+        }
+        const codebook = codebookForRequest(instanceId, body.codebook);
+        if (action === 'features') {
+          const code = String(body.code || '').trim();
+          if (!code) throw new Error('control features requires code');
+          const target = await resolveControlOnDevice(api, codebook, code, { withImage: true });
+          const image = target.node && target.node.imageFeatures
+            ? {
+                name: String(body.imageName || code).slice(0, 120),
+                hash: target.node.imageFeatures.hash,
+                avgColor: target.node.imageFeatures.avgColor,
+                dominantColor: target.node.imageFeatures.dominantColor,
+                maxDistance: body.maxDistance,
+                colorTolerance: body.colorTolerance,
+              }
+            : null;
+          const entry = {
+            code,
+            ...(body.name ? { name: String(body.name) } : {}),
+            features: { ...suggestFeatures(target.node), ...(image ? { image } : {}) },
+          };
+          sendJson(res, 200, {
+            ok: true,
+            action,
+            code: target.code,
+            snapshotId: target.snapshotId,
+            features: target.node.features || suggestFeatures(target.node),
+            imageFeatures: target.node.imageFeatures || null,
+            suggestedEntry: entry,
+          });
+          return;
+        }
+        if (action === 'assert' || action === 'wait') {
+          const code = String(body.code || '').trim();
+          const exists = body.exists !== false;
+          let target = null;
+          let error = null;
+          try {
+            target = await resolveControlOnDevice(api, codebook, code);
+          } catch (caught) {
+            error = caught;
+          }
+          if (exists && !target) throw error || new Error(`control ${code} is not visible`);
+          if (!exists && target) throw new Error(`control ${code} is visible; exists=false assertion failed`);
+          const step = { action: action === 'wait' ? 'waitFor' : 'assert', code };
+          if (!exists) step.exists = false;
+          const recorded = recordControlStep(instanceId, step, body);
+          sendJson(res, 200, {
+            ok: true,
+            action,
+            code,
+            exists,
+            snapshotId: target ? target.snapshotId : null,
+            recorded,
+          });
+          return;
+        }
+        if (action === 'swipe') {
+          const fromCode = String(body.fromCode || body.from || '').trim();
+          const toCode = String(body.toCode || body.to || '').trim();
+          let from = null;
+          let to = null;
+          if (fromCode) from = await resolveControlOnDevice(api, codebook, fromCode);
+          if (toCode) to = await resolveControlOnDevice(api, codebook, toCode);
+          let x1 = from ? from.node.bounds.center.x : Number(body.x1);
+          let y1 = from ? from.node.bounds.center.y : Number(body.y1);
+          let x2 = to ? to.node.bounds.center.x : Number(body.x2);
+          let y2 = to ? to.node.bounds.center.y : Number(body.y2);
+          if (![x1, y1, x2, y2].every(Number.isFinite)) {
+            throw new Error('control swipe needs fromCode/toCode or numeric x1,y1,x2,y2');
+          }
+          const durationMs = Math.max(1, Math.min(60000, Number(body.durationMs) || 300));
+          await api.input({ type: 'swipe', x1, y1, x2, y2, durationMs });
+          const step = fromCode || toCode
+            ? { action: 'swipe', fromCode: fromCode || undefined, toCode: toCode || undefined, durationMs }
+            : { action: 'swipe', x1, y1, x2, y2, durationMs };
+          const recorded = recordControlStep(instanceId, step, body);
+          sendJson(res, 200, { ok: true, action, fromCode: fromCode || null, toCode: toCode || null, x1, y1, x2, y2, recorded });
+          return;
+        }
+        const code = String(body.code || '').trim();
+        const target = await resolveControlOnDevice(api, codebook, code);
+        const center = target.node.bounds.center;
+        if (action === 'tap') {
+          await api.input({ type: 'tap', x: center.x, y: center.y });
+          const recorded = recordControlStep(instanceId, { action: 'tap', code }, body);
+          sendJson(res, 200, { ok: true, action, code: target.code, x: center.x, y: center.y, snapshotId: target.snapshotId, recorded });
+          return;
+        }
+        if (action === 'input') {
+          const text = body.text === undefined ? (body.value === undefined ? '' : String(body.value)) : String(body.text);
+          const submit = body.submit === true;
+          await api.input({ type: 'tap', x: center.x, y: center.y });
+          await new Promise((resolve) => setTimeout(resolve, 120));
+          if (text) await api.input({ type: 'text', text: text.slice(0, 4096) });
+          if (submit) await api.input({ type: 'key', key: 'ENTER' });
+          const recorded = recordControlStep(instanceId, { action: 'input', code, value: text, ...(submit ? { submit: true } : {}) }, body);
+          sendJson(res, 200, { ok: true, action, code: target.code, chars: text.length, submit, snapshotId: target.snapshotId, recorded });
+          return;
+        }
+        if (action === 'long_press') {
+          const durationMs = Math.max(300, Math.min(60000, Number(body.durationMs) || 800));
+          await api.input({ type: 'swipe', x1: center.x, y1: center.y, x2: center.x, y2: center.y, durationMs });
+          const recorded = recordControlStep(instanceId, { action: 'longPress', code, durationMs }, body);
+          sendJson(res, 200, { ok: true, action, code: target.code, durationMs, snapshotId: target.snapshotId, recorded });
+          return;
+        }
+        throw new Error(`unsupported control action: ${action || '(missing)'}`);
+      } catch (error) {
+        sendJson(res, 400, {
+          ok: false,
+          error: error && error.message ? error.message : String(error),
+          code: error && error.code ? error.code : null,
+          candidates: error && error.candidates ? error.candidates : [],
+          codebookCodes: error && error.codebookCodes ? error.codebookCodes : [],
+        });
+      }
+    }
+
+    async function handleSkillsRequest(req, res, instanceId, apiFactory) {
+      if (req.method === 'GET') {
+        const active = activeSkill(instanceId);
+        sendJson(res, 200, {
+          ok: true,
+          instance: instanceId,
+          skills: (await skillStore.list()).map(skillSummary),
+          recording: active ? { ...skillSummary(active.skill), codebook: active.skill.codebook } : null,
+        });
+        return;
+      }
+      if (req.method !== 'POST') {
+        sendError(res, 405, 'GET or POST only');
+        return;
+      }
+      const body = await readJsonBody(req);
+      const action = String(body.action || '').toLowerCase().replace(/-/g, '_');
+      try {
+        if (action === 'start') {
+          const started = await skillRecorder.start(instanceId, {
+            name: body.name || body.skillName,
+            id: body.skillId || body.id,
+            package: body.packageName || body.package,
+            description: body.description,
+            target: body.targetCode || body.target,
+            codebook: body.codebook,
+          });
+          sendJson(res, 200, { ok: true, action, recording: started });
+          return;
+        }
+        if (action === 'stop') {
+          const saved = await skillRecorder.stop(instanceId, {
+            name: body.name || body.skillName,
+            package: body.packageName || body.package,
+            description: body.description,
+          });
+          sendJson(res, 200, { ok: true, action, skill: skillSummary(saved), result: saved });
+          return;
+        }
+        if (action === 'cancel') {
+          const cancelled = skillRecorder.cancel(instanceId);
+          sendJson(res, 200, { ok: true, action, cancelled });
+          return;
+        }
+        if (action === 'save') {
+          const source = body.skill && typeof body.skill === 'object' ? { ...body.skill } : { ...body };
+          if (!source.id && body.skillId) source.id = body.skillId;
+          if (!source.name && body.skillName) source.name = body.skillName;
+          delete source.action;
+          const saved = await skillStore.save(normalizeSkill(source));
+          sendJson(res, 200, { ok: true, action, skill: skillSummary(saved), result: saved });
+          return;
+        }
+        if (action === 'get') {
+          const id = String(body.skillId || body.id || '').trim();
+          if (!id) throw new Error('get requires skillId');
+          const skill = await skillStore.get(id);
+          if (!skill) throw new Error(`unknown Skill: ${id}`);
+          sendJson(res, 200, { ok: true, action, result: skill });
+          return;
+        }
+        if (action === 'delete') {
+          const id = String(body.skillId || body.id || '').trim();
+          if (!id) throw new Error('delete requires skillId');
+          const removed = await skillStore.remove(id);
+          sendJson(res, 200, { ok: true, action, removed });
+          return;
+        }
+        if (action === 'codebook') {
+          const id = String(body.skillId || body.id || '').trim();
+          if (!id) throw new Error('codebook requires skillId (or use /apk-vm/controls while recording)');
+          const skill = await skillStore.get(id);
+          if (!skill) throw new Error(`unknown Skill: ${id}`);
+          skill.codebook = normalizeCodebook(body.codebook || {});
+          const saved = await skillStore.save(skill);
+          sendJson(res, 200, { ok: true, action, skill: skillSummary(saved), codebook: saved.codebook });
+          return;
+        }
+        if (action === 'run') {
+          const id = String(body.skillId || body.id || '').trim();
+          if (!id) throw new Error('run requires skillId');
+          const skill = await skillStore.get(id);
+          if (!skill) throw new Error(`unknown Skill: ${id}`);
+          const api = apiFactory();
+          await ensureToolApiReady(api, 'skill_run');
+          const result = await runSkill(skill, api, {
+            speed: body.speed,
+            untilCode: body.untilCode || body.targetCode,
+            variables: body.variables,
+            dryRun: body.dryRun === true,
+            timeoutMs: body.timeoutMs,
+            package: body.packageName || body.package,
+          });
+          sendJson(res, 200, { ok: true, action, result });
+          return;
+        }
+        throw new Error(`unsupported Skill action: ${action || '(missing)'}`);
+      } catch (error) {
+        sendJson(res, 400, {
+          ok: false,
+          error: error && error.message ? error.message : String(error),
+          code: error && error.code ? error.code : null,
+          candidates: error && error.candidates ? error.candidates : [],
+          stepsRun: error && error.stepsRun,
+          stepIndex: error && error.stepIndex,
+          events: error && error.events ? error.events : [],
+        });
+      }
+    }
+
     register('/apk-vm/flows', async (req, res) => {
       await handleFlowRequest(req, res, 'default', async (payload) => {
         const status = await vm.status();
         if (!isReady(status)) throw new Error(`VM is not ready (state: ${status.state})`);
         return vm.input(payload);
       });
+    });
+
+    register('/apk-vm/skills', async (req, res) => {
+      await handleSkillsRequest(req, res, 'default', () => defaultToolApi());
+    });
+
+    register('/apk-vm/controls', async (req, res) => {
+      await handleControlRequest(req, res, 'default', () => defaultToolApi());
     });
 
     function storageSdkRoot() {
@@ -1093,6 +1529,63 @@ export function apply(ctx, config = {}) {
       sendError(res, 400, `unsupported setup action: ${action || '(missing)'}`);
     });
 
+    register('/apk-vm/ownership', async (req, res) => {
+      if (!instanceManager) {
+        sendError(res, 503, 'multi-instance support is disabled');
+        return;
+      }
+      if (req.method === 'GET' || req.method === 'HEAD') {
+        const query = requestQuery(req);
+        const instanceId = String(query.get('instanceId') || query.get('id') || 'default');
+        sendJson(res, 200, {
+          ok: true,
+          instanceId,
+          owner: instanceManager.ownerInfo(instanceId),
+          default: instanceManager.ownerInfo('default'),
+          owners: instanceManager.ownerList(),
+        });
+        return;
+      }
+      if (req.method !== 'POST') {
+        sendError(res, 405, 'GET or POST only');
+        return;
+      }
+      const body = await readJsonBody(req);
+      const action = String(body.action || 'status').toLowerCase();
+      const instanceId = String(body.instanceId || body.id || 'default');
+      const owner = instanceManager.ownerFor({
+        key: body.ownerKey || body.key || (body.owner && body.owner.key) || undefined,
+        scope: body.ownerScope || body.scope || (body.owner && body.owner.scope) || 'shared',
+        sessionId: body.sessionId || (body.owner && body.owner.sessionId) || null,
+        workspace: body.workspace || (body.owner && body.owner.workspace) || null,
+        label: body.ownerLabel || body.label || (body.owner && body.owner.label) || '桌面面板',
+        source: 'panel',
+      });
+      try {
+        if (action === 'claim') {
+          const result = instanceManager.claimOwner(instanceId, owner, { force: body.force === true });
+          sendJson(res, 200, { ok: true, instanceId, ...result });
+          return;
+        }
+        if (action === 'release') {
+          const released = instanceManager.releaseOwner(instanceId, owner, { force: body.force === true });
+          sendJson(res, 200, { ok: true, instanceId, released });
+          return;
+        }
+        if (action === 'touch') {
+          sendJson(res, 200, { ok: true, owner: instanceManager.touchOwner(instanceId, owner.key) });
+          return;
+        }
+        sendJson(res, 200, {
+          ok: true,
+          default: instanceManager.ownerInfo('default'),
+          owners: instanceManager.ownerList(),
+        });
+      } catch (error) {
+        sendError(res, error.status === 409 ? 409 : 400, error.message);
+      }
+    });
+
     register('/apk-vm/instances', async (req, res) => {
       if (!instanceManager) {
         sendError(res, 503, 'multi-instance support is disabled');
@@ -1100,6 +1593,7 @@ export function apply(ctx, config = {}) {
       }
       if (req.method === 'GET') {
         const defaultStatus = await vm.status();
+        const defaultOwnerInfo = instanceManager ? instanceManager.ownerInfo('default') : null;
         if (instanceManager) {
           for (const instance of instanceManager.instances.values()) {
             try {
@@ -1122,7 +1616,8 @@ export function apply(ctx, config = {}) {
               serial: defaultStatus.serial || null,
               root: defaultStatus.root === true,
               apk: snapshotApk(),
-              owner: instanceManager.defaultOwner,
+              owner: defaultOwnerInfo ? defaultOwnerInfo.key : null,
+              ownerInfo: defaultOwnerInfo,
               lastUsedAt: null,
               idleMs: null,
               videoClients: null,
@@ -1137,6 +1632,17 @@ export function apply(ctx, config = {}) {
         try {
           const instance = await instanceManager.create({ name: body.name });
           registerInstanceRoutes?.(instance.id);
+          const owner = body.ownerKey || body.ownerScope
+            ? instanceManager.ownerFor({
+                key: body.ownerKey || undefined,
+                scope: body.ownerScope || body.scope || 'shared',
+                sessionId: body.sessionId || null,
+                workspace: body.workspace || null,
+                label: body.ownerLabel || body.label || 'panel',
+                source: 'panel',
+              })
+            : null;
+          if (owner) instanceManager.claimOwner(instance.id, owner, { force: body.force === true });
           if (body.start === true) void instance.start();
           sendJson(res, 201, {
             ok: true,
@@ -1147,11 +1653,13 @@ export function apply(ctx, config = {}) {
               port: instance.port,
               state: instance.vm.state,
               serial: instance.vm._serialActive || null,
+              owner: owner ? owner.key : null,
+              ownerInfo: owner ? instanceManager.ownerInfo(instance.id) : null,
             },
             maxInstances: instanceManager.maxInstances,
           });
         } catch (error) {
-          sendError(res, 400, error.message);
+          sendError(res, error.status === 409 ? 409 : 400, error.message);
         }
         return;
       }
@@ -1171,6 +1679,7 @@ export function apply(ctx, config = {}) {
         sendError(res, 404, `unknown instance: ${id || '(missing)'}`);
         return;
       }
+      if (req.method === 'POST' && !assertHttpOwner(req, res, id)) return;
       const ready = async () => {
         const status = await instance.status();
         if (status.state !== 'ready') {
@@ -1287,6 +1796,14 @@ export function apply(ctx, config = {}) {
           if (status.state !== 'ready') throw new Error(`instance ${id} is not ready (state: ${status.state})`);
           return instance.input(payload);
         });
+        return;
+      }
+      if (rest === 'skills') {
+        await handleSkillsRequest(req, res, id, () => extraToolApi(instance));
+        return;
+      }
+      if (rest === 'controls') {
+        await handleControlRequest(req, res, id, () => extraToolApi(instance));
         return;
       }
       if (rest === 'snapshots') {
@@ -1597,6 +2114,8 @@ export function apply(ctx, config = {}) {
         'debug/pull',
         'debug/reboot',
         'flows',
+        'skills',
+        'controls',
         'network',
         'network/pcap',
         'snapshots',
@@ -2677,6 +3196,7 @@ export function apply(ctx, config = {}) {
       removePortForward: (local) => vm.removePortForward(local),
       screenRecord: (options) => vm.screenRecord(options),
       perfSnapshot: () => vm.perfSnapshot(),
+      screenshotBuffer: () => vm.screenshot(),
       screenshot: async () => {
         const buffer = await vm.screenshot();
         const target = path.join(os.tmpdir(), `apk-vm-shot-${Date.now()}.png`);
@@ -2729,6 +3249,7 @@ export function apply(ctx, config = {}) {
       removePortForward: (local) => instance.vm.removePortForward(local),
       screenRecord: (options) => instance.screenRecord(options),
       perfSnapshot: () => instance.perfSnapshot(),
+      screenshotBuffer: () => instance.screenshot(),
       screenshot: async () => {
         const buffer = await instance.screenshot();
         const target = path.join(os.tmpdir(), `apk-vm-shot-${instance.id}-${Date.now()}.png`);
@@ -2738,20 +3259,55 @@ export function apply(ctx, config = {}) {
     };
   }
 
+  function toolOwnerContext(args, exec) {
+    const session = exec && exec.agent ? exec.agent.session : null;
+    const header = session && session.header ? session.header : {};
+    const sessionId = header.id || header.sessionId || (session && session.id) ||
+      (exec && (exec.sessionId || exec.agentId || (exec.agent && exec.agent.id))) || null;
+    const workspace = header.cwd || (exec && exec.agent && exec.agent.cwd) ||
+      (exec && exec.cwd) || null;
+    return {
+      scope: normalizeScope((args && (args.ownerScope || args.owner_scope)) || OWNER_SCOPE.SHARED),
+      sessionId,
+      workspace,
+      label: (args && (args.ownerLabel || args.owner_label)) || null,
+      source: 'tool',
+    };
+  }
+
+  function ownerTakeoverRequested(args) {
+    return Boolean(args && (args.ownerForce === true || args.takeover === true));
+  }
+
   async function resolveToolApi(args, exec) {
     const requested = String((args && args.instance) || '').trim();
+    const action = String((args && args.action) || '');
+    // Ownership inspection/list is intentionally read-only: an Agent must be
+    // able to see why a VM is busy without claiming or forcing it.
+    if (action === 'owner_status' || action === 'list_instances') {
+      if (requested && requested !== 'default') {
+        if (!instanceManager) throw new Error('multi-instance support is disabled');
+        const instance = instanceManager.get(requested);
+        if (!instance) throw new Error(`unknown apk_vm instance: ${requested}`);
+        return extraToolApi(instance);
+      }
+      return defaultToolApi();
+    }
+    const owner = toolOwnerContext(args, exec);
+    const force = ownerTakeoverRequested(args);
     if (requested) {
-      if (requested === 'default') return defaultToolApi();
+      if (requested === 'default') {
+        if (instanceManager) instanceManager.claimOwner('default', owner, { force });
+        return defaultToolApi();
+      }
       if (!instanceManager) throw new Error('multi-instance support is disabled');
       const instance = instanceManager.get(requested);
       if (!instance) throw new Error(`unknown apk_vm instance: ${requested}`);
+      instanceManager.claimOwner(instance.id, owner, { force });
       return extraToolApi(instance);
     }
-    if (instanceManager && exec && exec.agent) {
-      const session = exec.agent.session;
-      const header = session && session.header ? session.header : {};
-      const key = header.id || header.sessionId || (session && session.id) || 'anonymous';
-      const assigned = await instanceManager.forAgent(key);
+    if (instanceManager && exec && (exec.agent || owner.sessionId)) {
+      const assigned = await instanceManager.forOwner(owner, { force });
       if (assigned && assigned.default === true) return defaultToolApi();
       if (assigned && assigned.id) registerInstanceRoutes?.(assigned.id);
       return extraToolApi(assigned);
@@ -2822,6 +3378,171 @@ export function apply(ctx, config = {}) {
     return Boolean(args.text || args.resourceId || args.contentDesc || args.className);
   }
 
+  function toolCodebook(instanceId, args) {
+    const active = skillRecorder.active(instanceId);
+    if (active) return active.skill.codebook;
+    if (args && args.codebook) return normalizeCodebook(args.codebook);
+    throw new Error('no active Skill codebook; start skill_start first or pass codebook');
+  }
+
+  async function toolResolveControl(api, codebook, code, options = {}) {
+    const value = String(code || '').trim();
+    if (!value) throw new Error('control code is required');
+    const dump = await api.uiDump();
+    const parsed = parseUiHierarchy(dump.xml);
+    const wantsImage = options.withImage === true
+      || (codebook.entries || []).some((entry) => entry.features && entry.features.image);
+    if (wantsImage && typeof api.screenshotBuffer === 'function') {
+      try {
+        attachNodeImageFeatures(await api.screenshotBuffer(), parsed.nodes);
+      } catch {
+        // Image matching will report a clear "no screenshot image features" error.
+      }
+    }
+    let screen = null;
+    try {
+      screen = await api.screenSize();
+    } catch {
+      screen = null;
+    }
+    const result = resolveControl(codebook, value, parsed.nodes, { screen });
+    if (!result.node || !result.node.bounds || !result.node.bounds.center) {
+      throw new Error(`control ${value} has no usable bounds on the current screen`);
+    }
+    return { ...result, snapshotId: snapshotIdForXml(dump.xml), screen };
+  }
+
+  function toolRecordControl(instanceId, step, args) {
+    if (args && args.record === false) return false;
+    if (!skillRecorder.active(instanceId)) return false;
+    skillRecorder.add(instanceId, step);
+    return true;
+  }
+
+  async function toolControlAction(api, action, args) {
+    await ensureToolApiReady(api, action);
+    if (action === 'control_ui') {
+      const payload = buildInspectorPayload(await api.uiDump(), await api.screenSize().catch(() => null));
+      return { ok: true, summary: `${payload.controls.length} control(s), snapshot ${payload.snapshotId || '?'}`, result: payload };
+    }
+    if (action === 'control_launch') {
+      const pkg = String(args.packageName || args.package || '').trim();
+      if (!pkg) throw new Error('control_launch requires packageName');
+      const result = await api.launchPackage(pkg);
+      const recorded = toolRecordControl(api.id, { action: 'launch', package: pkg }, args);
+      return { ok: true, summary: `launched ${pkg}${recorded ? ' (recorded)' : ''}`, result: { package: pkg, result, recorded } };
+    }
+    if (action === 'control_codebook') {
+      const active = skillRecorder.active(api.id);
+      if (active) {
+        const codebook = await skillRecorder.updateCodebook(api.id, args.codebook || {});
+        return { ok: true, summary: `updated recording codebook (${codebook.entries.length} codes)`, result: { codebook } };
+      }
+      const id = String(args.skillId || '').trim();
+      if (!id) throw new Error('control_codebook needs skillId when no recording is active');
+      const skill = await skillStore.get(id);
+      if (!skill) throw new Error(`unknown Skill: ${id}`);
+      skill.codebook = normalizeCodebook(args.codebook || {});
+      const saved = await skillStore.save(skill);
+      return { ok: true, summary: `saved codebook for ${saved.name} (${saved.codebook.entries.length} codes)`, result: { skill: saved } };
+    }
+    const codebook = toolCodebook(api.id, args);
+    if (action === 'control_features') {
+      const code = String(args.code || '').trim();
+      if (!code) throw new Error('control_features requires code');
+      const target = await toolResolveControl(api, codebook, code, { withImage: true });
+      const image = target.node && target.node.imageFeatures
+        ? {
+            name: String(args.imageName || code).slice(0, 120),
+            hash: target.node.imageFeatures.hash,
+            avgColor: target.node.imageFeatures.avgColor,
+            dominantColor: target.node.imageFeatures.dominantColor,
+            maxDistance: args.maxDistance,
+            colorTolerance: args.colorTolerance,
+          }
+        : null;
+      const entry = {
+        code,
+        ...(args.name ? { name: String(args.name) } : {}),
+        features: { ...suggestFeatures(target.node), ...(image ? { image } : {}) },
+      };
+      return {
+        ok: true,
+        summary: `features for ${target.code}${image ? ` + image ${image.name}` : ''}`,
+        result: {
+          code: target.code,
+          snapshotId: target.snapshotId,
+          features: target.node.features || suggestFeatures(target.node),
+          imageFeatures: target.node.imageFeatures || null,
+          suggestedEntry: entry,
+        },
+      };
+    }
+    if (action === 'control_assert' || action === 'control_wait') {
+      const code = String(args.code || '').trim();
+      const exists = args.exists !== false;
+      let target = null;
+      let error = null;
+      try {
+        target = await toolResolveControl(api, codebook, code);
+      } catch (caught) {
+        error = caught;
+      }
+      if (exists && !target) throw error || new Error(`control ${code} is not visible`);
+      if (!exists && target) throw new Error(`control ${code} is visible; exists=false assertion failed`);
+      const recordAction = action === 'control_wait' ? 'waitFor' : 'assert';
+      const recorded = toolRecordControl(api.id, { action: recordAction, code, ...(exists ? {} : { exists: false }) }, args);
+      return {
+        ok: true,
+        summary: `${code} ${exists ? 'visible' : 'absent'}${recorded ? ' (recorded)' : ''}`,
+        result: { code, exists, snapshotId: target ? target.snapshotId : null, recorded },
+      };
+    }
+    if (action === 'control_swipe') {
+      const fromCode = String(args.fromCode || '').trim();
+      const toCode = String(args.toCode || '').trim();
+      const from = fromCode ? await toolResolveControl(api, codebook, fromCode) : null;
+      const to = toCode ? await toolResolveControl(api, codebook, toCode) : null;
+      const x1 = from ? from.node.bounds.center.x : Number(args.x1);
+      const y1 = from ? from.node.bounds.center.y : Number(args.y1);
+      const x2 = to ? to.node.bounds.center.x : Number(args.x2);
+      const y2 = to ? to.node.bounds.center.y : Number(args.y2);
+      if (![x1, y1, x2, y2].every(Number.isFinite)) throw new Error('control_swipe needs fromCode/toCode or x1,y1,x2,y2');
+      const durationMs = Math.max(1, Math.min(60000, Number(args.durationMs) || 300));
+      await api.input({ type: 'swipe', x1, y1, x2, y2, durationMs });
+      const step = fromCode || toCode
+        ? { action: 'swipe', fromCode: fromCode || undefined, toCode: toCode || undefined, durationMs }
+        : { action: 'swipe', x1, y1, x2, y2, durationMs };
+      const recorded = toolRecordControl(api.id, step, args);
+      return { ok: true, summary: `swiped ${fromCode || `${x1},${y1}`} -> ${toCode || `${x2},${y2}`}${recorded ? ' (recorded)' : ''}`, result: { x1, y1, x2, y2, recorded } };
+    }
+    const code = String(args.code || '').trim();
+    const target = await toolResolveControl(api, codebook, code);
+    const center = target.node.bounds.center;
+    if (action === 'control_tap') {
+      await api.input({ type: 'tap', x: center.x, y: center.y });
+      const recorded = toolRecordControl(api.id, { action: 'tap', code }, args);
+      return { ok: true, summary: `tapped ${target.code} at ${center.x},${center.y}${recorded ? ' (recorded)' : ''}`, result: { code: target.code, x: center.x, y: center.y, snapshotId: target.snapshotId, recorded } };
+    }
+    if (action === 'control_long_press') {
+      const durationMs = Math.max(300, Math.min(60000, Number(args.durationMs) || 800));
+      await api.input({ type: 'swipe', x1: center.x, y1: center.y, x2: center.x, y2: center.y, durationMs });
+      const recorded = toolRecordControl(api.id, { action: 'longPress', code, durationMs }, args);
+      return { ok: true, summary: `long-pressed ${target.code}${recorded ? ' (recorded)' : ''}`, result: { code: target.code, durationMs, recorded } };
+    }
+    if (action === 'control_input') {
+      const text = args.text === undefined ? (args.value === undefined ? '' : String(args.value)) : String(args.text);
+      const submit = args.submit === true;
+      await api.input({ type: 'tap', x: center.x, y: center.y });
+      await new Promise((resolve) => setTimeout(resolve, 120));
+      if (text) await api.input({ type: 'text', text: text.slice(0, 4096) });
+      if (submit) await api.input({ type: 'key', key: 'ENTER' });
+      const recorded = toolRecordControl(api.id, { action: 'input', code, value: text, ...(submit ? { submit: true } : {}) }, args);
+      return { ok: true, summary: `typed ${text.length} char(s) into ${target.code}${submit ? ' + ENTER' : ''}${recorded ? ' (recorded)' : ''}`, result: { code: target.code, chars: text.length, submit, recorded } };
+    }
+    throw new Error(`unsupported control action: ${action}`);
+  }
+
   const apkVmTool = {
     name: 'apk_vm',
     description:
@@ -2829,7 +3550,10 @@ export function apply(ctx, config = {}) {
       'The VM is usually already running (warm start); adbd runs as root once ready. ' +
       'Actions: info, shell, logcat, getprop, setprop, packages, install, push, pull, reboot, root, ' +
       'force_stop, clear_data, uninstall, rotate, ui_dump, inspect_ui, proxy, install_ca, network, record, perf, screenshot, tap, swipe, long_press, key, text, ' +
-      'apk_info, find_ui, assert_text, tap_text, clipboard_get, clipboard_set, devices, attach_device, detach_device, start, stop, list_instances, create_instance, destroy_instance, flow_start, flow_stop, flow_list, flow_replay, storage, clean_storage. ' +
+      'apk_info, find_ui, assert_text, tap_text, clipboard_get, clipboard_set, devices, attach_device, detach_device, start, stop, list_instances, create_instance, destroy_instance, owner_status, claim_vm, release_vm, flow_start, flow_stop, flow_list, flow_replay, storage, clean_storage, ' +
+      'skill_list, skill_get, skill_save, skill_delete, skill_start, skill_stop, skill_cancel, skill_run, skill_codebook, control_ui, control_features, control_codebook, control_tap, control_input, control_long_press, control_swipe, control_assert, control_wait, control_launch. ' +
+      'App-operation Skills use a persisted Control Codebook (stable codes such as LOGIN_BTN or A01) instead of raw coordinates; record once with skill_start + control_* then replay with skill_run to reach a page quickly. ' +
+      'VM ownership: pass ownerScope=conversation or project to use a dedicated VM for this session/project; shared is the default. owner_status / claim_vm / release_vm inspect or change the current lease. A VM owned by another conversation is never taken silently: the tool returns a vm-busy error unless ownerForce=true (explicit takeover). ' +
       'Multi-instance: pass `instance` to target an isolated VM; omit it to use the calling Agent\'s ' +
       'assigned instance (first Agent gets the default VM, later Agents get isolated instances). ' +
       'Use shell for low-level Android commands, logcat for logs, ' +
@@ -2842,9 +3566,12 @@ export function apply(ctx, config = {}) {
       properties: {
         action: {
           type: 'string',
-          description: 'info|shell|logcat|getprop|setprop|packages|install|push|pull|reboot|root|force_stop|clear_data|uninstall|rotate|ui_dump|inspect_ui|proxy|install_ca|network|record|perf|screenshot|tap|swipe|long_press|key|text|apk_info|find_ui|assert_text|tap_text|clipboard_get|clipboard_set|devices|attach_device|detach_device|start|stop|list_instances|create_instance|destroy_instance|flow_start|flow_stop|flow_list|flow_replay|storage|clean_storage',
+          description: 'info|shell|logcat|getprop|setprop|packages|install|push|pull|reboot|root|force_stop|clear_data|uninstall|rotate|ui_dump|inspect_ui|proxy|install_ca|network|record|perf|screenshot|tap|swipe|long_press|key|text|apk_info|find_ui|assert_text|tap_text|clipboard_get|clipboard_set|devices|attach_device|detach_device|start|stop|list_instances|create_instance|destroy_instance|owner_status|claim_vm|release_vm|flow_start|flow_stop|flow_list|flow_replay|storage|clean_storage|skill_list|skill_get|skill_save|skill_delete|skill_start|skill_stop|skill_cancel|skill_run|skill_codebook|control_ui|control_features|control_codebook|control_tap|control_input|control_long_press|control_swipe|control_assert|control_wait|control_launch',
         },
         instance: { type: 'string', description: 'Target VM instance id (default or an extra instance from list_instances). Omit for the calling Agent\'s assigned instance.' },
+        ownerScope: { type: 'string', enum: ['shared', 'conversation', 'project'], description: 'VM ownership scope: shared (default), conversation (dedicated per DSH session), or project (dedicated per workspace).' },
+        ownerLabel: { type: 'string', description: 'Optional human-readable owner label shown in the VM panel.' },
+        ownerForce: { type: 'boolean', description: 'Explicitly take over a VM owned by another conversation/project (default false; conflicts return vm-busy).' },
         instanceName: { type: 'string', description: 'create_instance: optional name for the new isolated instance.' },
         start: { type: 'boolean', description: 'create_instance: start the new instance immediately when true.' },
         command: { type: 'string', description: 'Shell command for action=shell.' },
@@ -2891,6 +3618,24 @@ export function apply(ctx, config = {}) {
         testHost: { type: 'string', description: 'network test: host to ping/TCP-test (default: emulator host alias).' },
         testPort: { type: 'integer', description: 'network test: TCP port.' },
         pcapPath: { type: 'string', description: 'network pcap: host path ending in .pcap; capture starts on the next emulator start.' },
+        code: { type: 'string', description: 'Control Codebook code or semantic name (e.g. A01, LOGIN_BTN); used by control_* and Skill steps.' },
+        imageName: { type: 'string', description: 'control_features: human name for the captured image feature (e.g. star-icon).' },
+        maxDistance: { type: 'number', description: 'control_features: optional image dHash distance tolerance (default 10).' },
+        colorTolerance: { type: 'number', description: 'control_features: optional RGB colour tolerance (default 36).' },
+        skillId: { type: 'string', description: 'Skill id for skill_get/skill_save/skill_delete/skill_run/skill_codebook.' },
+        skillName: { type: 'string', description: 'Human name for skill_start/skill_stop.' },
+        skillSteps: { type: 'array', description: 'skill_save: array of semantic steps (each uses code/selector, never raw coordinates).', items: { type: 'object', additionalProperties: true } },
+        codebook: { type: 'object', description: 'Control Codebook: { entries: [{ code, name, aliases, features: {...} }] } or an entries array.', additionalProperties: true },
+        targetCode: { type: 'string', description: 'Skill target code; skill_run stops successfully once it is visible.' },
+        untilCode: { type: 'string', description: 'skill_run: alias for targetCode.' },
+        fromCode: { type: 'string', description: 'control_swipe: code of the start control.' },
+        toCode: { type: 'string', description: 'control_swipe: code of the end control.' },
+        speed: { type: 'number', description: 'Skill replay delay multiplier (1 = recorded speed, 2 = twice as fast).' },
+        variables: { type: 'object', description: 'Skill replay variables interpolated into {{name}} placeholders.', additionalProperties: true },
+        dryRun: { type: 'boolean', description: 'skill_run: resolve checks without touching the device.' },
+        exists: { type: 'boolean', description: 'control_assert: expected visibility (default true; false asserts absent).' },
+        record: { type: 'boolean', description: 'control_*: record the step while a Skill recording is active (default true).' },
+        description: { type: 'string', description: 'skill_start/skill_save: optional human description.' },
       },
       required: ['action'],
     },
@@ -2920,6 +3665,7 @@ export function apply(ctx, config = {}) {
 
       if (action === 'list_instances') {
         const defaultStatus = await vm.status();
+        const defaultOwnerInfo = instanceManager ? instanceManager.ownerInfo('default') : null;
         const instances = [
           {
             id: 'default',
@@ -2929,12 +3675,16 @@ export function apply(ctx, config = {}) {
             state: defaultStatus.state,
             serial: defaultStatus.serial || null,
             root: defaultStatus.root === true,
+            owner: instanceManager ? instanceManager.defaultOwner : null,
+            ownerInfo: defaultOwnerInfo,
+            ownerLabel: defaultOwnerInfo ? defaultOwnerInfo.label : null,
+            scope: defaultOwnerInfo ? defaultOwnerInfo.scope : null,
           },
           ...(instanceManager ? instanceManager.list() : []),
         ];
         return {
           ok: true,
-          summary: instances.map((entry) => `${entry.id}:${entry.state}${entry.serial ? '@' + entry.serial : ''}`).join(', '),
+          summary: instances.map((entry) => `${entry.id}:${entry.state}${entry.serial ? '@' + entry.serial : ''}${entry.ownerInfo ? ' owned:' + entry.ownerInfo.label : ''}`).join(', '),
           result: { instances, maxInstances: instanceManager ? instanceManager.maxInstances : 1 },
         };
       }
@@ -2942,11 +3692,16 @@ export function apply(ctx, config = {}) {
         if (!instanceManager) throw new Error('multi-instance support is disabled');
         const instance = await instanceManager.create({ name: args.instanceName || args.name });
         registerInstanceRoutes?.(instance.id);
+        if (args.ownerScope) {
+          const owner = toolOwnerContext(args, exec);
+          instanceManager.claimOwner(instance.id, owner, { force: ownerTakeoverRequested(args) });
+        }
         if (args.start === true) void instance.start();
+        const ownerInfo = instanceManager.ownerInfo(instance.id);
         return {
           ok: true,
-          summary: `created instance ${instance.id} (avd=${instance.avdName}, port=${instance.port})`,
-          result: { id: instance.id, avdName: instance.avdName, port: instance.port },
+          summary: `created instance ${instance.id} (avd=${instance.avdName}, port=${instance.port})${ownerInfo ? ' for ' + ownerInfo.label : ''}`,
+          result: { id: instance.id, avdName: instance.avdName, port: instance.port, owner: ownerInfo },
         };
       }
       if (action === 'destroy_instance') {
@@ -2992,6 +3747,40 @@ export function apply(ctx, config = {}) {
         frame.buffer = null;
         return { ok: true, summary: 'detached external device; managed AVD identity restored', result: await vm.status() };
       }
+      if (action === 'owner_status') {
+        if (!instanceManager) throw new Error('multi-instance support is disabled');
+        return {
+          ok: true,
+          summary: instanceManager.ownerList().length
+            ? instanceManager.ownerList().map((entry) => `${entry.id}:${entry.label}`).join(', ')
+            : 'no VM leases',
+          result: { default: instanceManager.ownerInfo('default'), owners: instanceManager.ownerList() },
+        };
+      }
+      if (action === 'claim_vm') {
+        if (!instanceManager) throw new Error('multi-instance support is disabled');
+        const id = String(args.instance || 'default');
+        if (id !== 'default' && !instanceManager.get(id)) throw new Error(`unknown instance: ${id}`);
+        const owner = toolOwnerContext(args, exec);
+        const result = instanceManager.claimOwner(id, owner, { force: ownerTakeoverRequested(args) });
+        return {
+          ok: true,
+          summary: `claimed ${id} for ${result.lease.label}${result.previous ? ` (took over from ${result.previous.label})` : ''}`,
+          result: { instanceId: id, ...result },
+        };
+      }
+      if (action === 'release_vm') {
+        if (!instanceManager) throw new Error('multi-instance support is disabled');
+        const id = String(args.instance || 'default');
+        if (id !== 'default' && !instanceManager.get(id)) throw new Error(`unknown instance: ${id}`);
+        const owner = toolOwnerContext(args, exec);
+        const released = instanceManager.releaseOwner(id, owner, { force: ownerTakeoverRequested(args) });
+        return {
+          ok: true,
+          summary: released ? `released ${id} (was ${released.label})` : `${id} is not leased`,
+          result: { instanceId: id, released },
+        };
+      }
 
       const api = await resolveToolApi(args, exec);
       if (action === 'flow_list') {
@@ -3016,6 +3805,106 @@ export function apply(ctx, config = {}) {
           instanceId: api.id,
         });
         return { ok: true, summary: `replayed ${replayed.steps} step(s) from ${replayed.name}`, result: replayed };
+      }
+      if (action.startsWith('skill_')) {
+        if (action === 'skill_list') {
+          const skills = await skillStore.list();
+          const active = skillRecorder.active(api.id);
+          return {
+            ok: true,
+            summary: `${skills.length} Skill(s) on ${api.id}${active ? `; recording ${active.skill.name}` : ''}`,
+            result: { instance: api.id, skills: skills.map(skillSummary), recording: active ? skillSummary(active.skill) : null },
+          };
+        }
+        if (action === 'skill_get') {
+          const id = String(args.skillId || '').trim();
+          if (!id) throw new Error('skill_get requires skillId');
+          const skill = await skillStore.get(id);
+          if (!skill) throw new Error(`unknown Skill: ${id}`);
+          return { ok: true, summary: `${skill.name}: ${skill.steps.length} step(s), ${skill.codebook.entries.length} code(s)`, result: skill };
+        }
+        if (action === 'skill_delete') {
+          const id = String(args.skillId || '').trim();
+          if (!id) throw new Error('skill_delete requires skillId');
+          const removed = await skillStore.remove(id);
+          return { ok: true, summary: `deleted Skill ${id}`, result: { removed } };
+        }
+        if (action === 'skill_start') {
+          const started = await skillRecorder.start(api.id, {
+            name: args.skillName || args.name,
+            id: args.skillId,
+            package: args.packageName,
+            description: args.description,
+            target: args.targetCode,
+            codebook: args.codebook,
+          });
+          return { ok: true, summary: `recording Skill ${started.name}; use control_* with codes, then skill_stop`, result: started };
+        }
+        if (action === 'skill_stop') {
+          const saved = await skillRecorder.stop(api.id, {
+            name: args.skillName || args.name,
+            package: args.packageName,
+            description: args.description,
+          });
+          return { ok: true, summary: `saved Skill ${saved.name} (${saved.id}, ${saved.steps.length} steps)`, result: saved };
+        }
+        if (action === 'skill_cancel') {
+          return { ok: true, summary: `cancelled recording on ${api.id}`, result: { cancelled: skillRecorder.cancel(api.id) } };
+        }
+        if (action === 'skill_save') {
+          const id = String(args.skillId || '').trim();
+          const existing = id ? await skillStore.get(id) : null;
+          const source = {
+            ...(existing || {}),
+            ...(id ? { id } : {}),
+            ...(args.skillName ? { name: args.skillName } : {}),
+            ...(args.description ? { description: args.description } : {}),
+            ...(args.packageName ? { package: args.packageName } : {}),
+            ...(args.targetCode ? { target: args.targetCode } : {}),
+            ...(args.codebook ? { codebook: args.codebook } : {}),
+            ...(Array.isArray(args.skillSteps) ? { steps: args.skillSteps } : {}),
+          };
+          const saved = await skillStore.save(normalizeSkill(source));
+          return { ok: true, summary: `saved Skill ${saved.name} (${saved.id}, ${saved.steps.length} steps)`, result: saved };
+        }
+        if (action === 'skill_codebook') {
+          const active = skillRecorder.active(api.id);
+          if (active) {
+            const codebook = await skillRecorder.updateCodebook(api.id, args.codebook || {});
+            return { ok: true, summary: `updated recording codebook (${codebook.entries.length} codes)`, result: { codebook } };
+          }
+          const id = String(args.skillId || '').trim();
+          if (!id) throw new Error('skill_codebook requires skillId when no recording is active');
+          const skill = await skillStore.get(id);
+          if (!skill) throw new Error(`unknown Skill: ${id}`);
+          skill.codebook = normalizeCodebook(args.codebook || {});
+          const saved = await skillStore.save(skill);
+          return { ok: true, summary: `saved codebook for ${saved.name} (${saved.codebook.entries.length} codes)`, result: saved };
+        }
+        if (action === 'skill_run') {
+          const id = String(args.skillId || '').trim();
+          if (!id) throw new Error('skill_run requires skillId');
+          const skill = await skillStore.get(id);
+          if (!skill) throw new Error(`unknown Skill: ${id}`);
+          await ensureToolApiReady(api, action);
+          const result = await runSkill(skill, api, {
+            speed: args.speed,
+            untilCode: args.untilCode || args.targetCode,
+            variables: args.variables,
+            dryRun: args.dryRun === true,
+            timeoutMs: args.timeoutMs,
+            package: args.packageName,
+          });
+          return {
+            ok: true,
+            summary: `ran ${skill.name}: ${result.stepsRun}/${result.stepsTotal} step(s) in ${result.durationMs}ms${result.reached ? `, reached ${result.untilCode}` : result.untilCode ? `, target ${result.untilCode} not reached` : ''}`,
+            result,
+          };
+        }
+        throw new Error(`unsupported skill action: ${action}`);
+      }
+      if (action.startsWith('control_')) {
+        return toolControlAction(api, action, args);
       }
       if (action === 'storage') {
         const report = await collectStorage({

@@ -23,6 +23,9 @@ spike/scrcpy/vendor/*.jar
 # npm pack output
 *.tgz
 
+# local App-operation Skills (recorded on this workspace, never published)
+.apk-vm/
+
 # upstream scrcpy sources/tarballs (kept locally for protocol work only)
 spike/scrcpy/src/
 spike/scrcpy/vendor/

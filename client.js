@@ -30,7 +30,7 @@ window.__ModuleLoader__.load({
     var SWIPE_THRESHOLD_PX = 24;
     var FRAME_INTERVAL_MS = 500;
     var STATE_INTERVAL_MS = 2000;
-    var CLIENT_VERSION = '0.8.1';
+    var CLIENT_VERSION = '0.10.0';
 
     /* ------------------------------------------------------------------ *
      * Optional dsh-better-sidebar integration.
@@ -113,6 +113,19 @@ window.__ModuleLoader__.load({
       'pill.boot': 'boot {s}s',
       'pill.snapshot': 'quick {s}s',
       'pill.cold': 'cold {s}s',
+      'owner.pill': 'owner: {label}',
+      'owner.shared': 'shared',
+      'owner.conversation': 'conversation VM',
+      'owner.project': 'project VM',
+      'owner.title': 'VM usage',
+      'owner.none': 'unowned',
+      'owner.claim': 'Claim',
+      'owner.release': 'Release',
+      'owner.claimOk': 'VM claimed',
+      'owner.releaseOk': 'VM released',
+      'owner.busy': 'in use by {label}',
+      'owner.scope': 'Scope',
+      'owner.forceHint': 'Another owner holds this VM; release it first.',
       'action.start': 'Start VM',
       'action.starting': 'Starting…',
       'action.stop': 'Stop',
@@ -232,6 +245,7 @@ window.__ModuleLoader__.load({
       'network.forwardLocal': 'Host port',
       'network.forwardRemote': 'Guest port',
       'network.addForward': 'Add forward',
+      'network.presets': 'Presets',
       'network.remove': 'Remove',
       'network.mode': 'Mode',
       'network.isolated': 'Isolated',
@@ -263,6 +277,20 @@ window.__ModuleLoader__.load({
       'flow.saved': 'Saved {name}',
       'flow.done': 'Replayed {name}',
       'flow.count': '{n} step(s)',
+      'skill.title': 'App operation Skills',
+      'skill.start': 'Record Skill',
+      'skill.stop': 'Stop recording',
+      'skill.name': 'Skill name',
+      'skill.target': 'Target code (optional)',
+      'skill.run': 'Run to target',
+      'skill.delete': 'Delete',
+      'skill.empty': 'No App Skills yet',
+      'skill.recording': 'Recording semantic controls…',
+      'skill.saved': 'Saved Skill {name}',
+      'skill.done': 'Ran {name} ({n} steps)',
+      'skill.failed': 'Skill run failed',
+      'skill.meta': '{n} steps · {codes} codes',
+      'skill.hint': 'Agent records code-based controls; replay skips fixed sleeps and stops at target code.',
       'snapshots.title': 'VM snapshots',
       'snapshots.placeholder': 'snapshot name',
       'snapshots.save': 'Save',
@@ -402,6 +430,19 @@ window.__ModuleLoader__.load({
       'pill.boot': '启动用时 {s} 秒',
       'pill.snapshot': '快照启动 {s} 秒',
       'pill.cold': '冷启动 {s} 秒',
+      'owner.pill': '使用者：{label}',
+      'owner.shared': '共享',
+      'owner.conversation': '对话专属',
+      'owner.project': '项目专属',
+      'owner.title': '虚拟机使用',
+      'owner.none': '未占用',
+      'owner.claim': '认领',
+      'owner.release': '释放',
+      'owner.claimOk': '已认领虚拟机',
+      'owner.releaseOk': '已释放虚拟机',
+      'owner.busy': '被 {label} 占用',
+      'owner.scope': '范围',
+      'owner.forceHint': '其他使用者正在占用，请先释放。',
       'action.start': '启动虚拟机',
       'action.starting': '正在启动…',
       'action.stop': '停止',
@@ -521,6 +562,7 @@ window.__ModuleLoader__.load({
       'network.forwardLocal': '宿主机端口',
       'network.forwardRemote': 'Guest 端口',
       'network.addForward': '添加转发',
+      'network.presets': '预设',
       'network.remove': '删除',
       'network.mode': '模式',
       'network.isolated': '隔离',
@@ -552,6 +594,20 @@ window.__ModuleLoader__.load({
       'flow.saved': '已保存 {name}',
       'flow.done': '已回放 {name}',
       'flow.count': '{n} 步',
+      'skill.title': '应用操作 Skill',
+      'skill.start': '录制 Skill',
+      'skill.stop': '停止录制',
+      'skill.name': 'Skill 名称',
+      'skill.target': '目标编码（可选）',
+      'skill.run': '运行到目标',
+      'skill.delete': '删除',
+      'skill.empty': '还没有 App Skill',
+      'skill.recording': '正在录制语义控件…',
+      'skill.saved': '已保存 Skill {name}',
+      'skill.done': '已运行 {name}（{n} 步）',
+      'skill.failed': 'Skill 运行失败',
+      'skill.meta': '{n} 步 · {codes} 个编码',
+      'skill.hint': 'Agent 用编码录制操作；回放跳过固定等待，并在目标编码出现时提前结束。',
       'snapshots.title': 'VM 快照',
       'snapshots.placeholder': '快照名称',
       'snapshots.save': '保存',
@@ -762,6 +818,49 @@ window.__ModuleLoader__.load({
      * reject, so a dead Host route only produces an inline error banner.
      * ------------------------------------------------------------------ */
 
+    var PANEL_OWNER_ID = 'apkvm.panel.id';
+    var PANEL_OWNER_SCOPE = 'apkvm.panel.scope';
+
+    function panelOwnerId() {
+      try {
+        var stored = window.localStorage.getItem(PANEL_OWNER_ID);
+        if (stored) return String(stored).slice(0, 120);
+        var created = Math.random().toString(36).slice(2, 10);
+        window.localStorage.setItem(PANEL_OWNER_ID, created);
+        return created;
+      } catch (error) {
+        return 'default';
+      }
+    }
+
+    function panelOwnerKey() {
+      return 'panel:' + panelOwnerScope() + ':' + panelOwnerId();
+    }
+
+    function panelOwnerScope() {
+      try {
+        var stored = window.localStorage.getItem(PANEL_OWNER_SCOPE);
+        return stored === 'conversation' || stored === 'project' ? stored : 'shared';
+      } catch (error) {
+        return 'shared';
+      }
+    }
+
+    function panelOwnerHeaders() {
+      return {
+        'x-apk-vm-owner': panelOwnerKey(),
+        'x-apk-vm-scope': panelOwnerScope(),
+        'x-apk-vm-label': '桌面面板',
+      };
+    }
+
+    var PORT_PRESETS = [
+      { key: 'metro', label: 'Metro 8081', localPort: 8081, remotePort: 8081 },
+      { key: 'http', label: 'HTTP 8080', localPort: 8080, remotePort: 8080 },
+      { key: 'frida', label: 'Frida 27042', localPort: 27042, remotePort: 27042 },
+      { key: 'devtools', label: 'DevTools 9222', localPort: 9222, remotePort: 9222 },
+    ];
+
     function requestJson(url, options, T) {
       var tr = typeof T === 'function' ? T : createTranslator(null);
       var opts = isObject(options) ? options : {};
@@ -769,10 +868,18 @@ window.__ModuleLoader__.load({
         return Promise.resolve({ ok: false, status: 0, error: tr('err.noFetch'), data: null });
       }
       var init = { method: opts.method ? String(opts.method).toUpperCase() : 'GET', cache: 'no-store' };
+      var headers = {};
       if (opts.body !== undefined) {
         init.body = opts.body;
-        init.headers = { 'content-type': 'application/json' };
+        headers['content-type'] = 'application/json';
       }
+      if (init.method !== 'GET' && init.method !== 'HEAD') {
+        var ownerHeaders = panelOwnerHeaders();
+        for (var ownerHeader in ownerHeaders) {
+          if (Object.prototype.hasOwnProperty.call(ownerHeaders, ownerHeader)) headers[ownerHeader] = ownerHeaders[ownerHeader];
+        }
+      }
+      if (Object.keys(headers).length) init.headers = headers;
       return fetch(url, init)
         .then(function (response) {
           return response.text().then(function (text) {
@@ -1141,7 +1248,12 @@ window.__ModuleLoader__.load({
       '.apkvm-instactions{display:flex;gap:3px;flex:none}' +
       '.apkvm-mini{font:inherit;font-size:10px;height:19px;padding:0 5px;border-radius:5px;border:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-base);color:var(--dsw-alias-label-secondary);cursor:pointer}' +
       '.apkvm-mini:hover{color:var(--dsw-alias-label-primary);border-color:var(--dsw-alias-brand-primary)}' +
+      '.apkvm-mini.active{color:var(--dsw-alias-brand-primary);border-color:var(--dsw-alias-brand-primary);background:var(--dsw-alias-bg-layer-2)}' +
+      '.apkvm-mini:disabled{opacity:.5;cursor:default}' +
       '.apkvm-mini.danger:hover{color:var(--dsw-alias-state-error-primary);border-color:var(--dsw-alias-state-error-primary)}' +
+      '.apkvm-ownerbody{padding:6px 10px 9px;display:flex;flex-direction:column;gap:7px}' +
+      '.apkvm-ownerrow{font-size:11px;line-height:16px}' +
+      '.apkvm-ownercontrols{display:flex;align-items:center;gap:5px;flex-wrap:wrap}' +
       '.apkvm-appsbody{display:flex;flex-direction:column;gap:5px;padding-top:4px}' +
       '.apkvm-appslist{display:flex;flex-direction:column;gap:3px;max-height:180px}' +
       '.apkvm-approw{display:flex;align-items:center;gap:4px;min-width:0;font-size:11px}' +
@@ -1419,6 +1531,15 @@ window.__ModuleLoader__.load({
         var instancesListState = React.useState([]);
         var instancesList = instancesListState[0];
         var setInstancesList = instancesListState[1];
+        var ownershipState = React.useState(null);
+        var ownership = ownershipState[0];
+        var setOwnership = ownershipState[1];
+        var panelScopeState = React.useState(panelOwnerScope());
+        var panelScope = panelScopeState[0];
+        var setPanelScope = panelScopeState[1];
+        var ownerBusyState = React.useState(false);
+        var ownerBusy = ownerBusyState[0];
+        var setOwnerBusy = ownerBusyState[1];
         var gridOpenState = React.useState(false);
         var gridOpen = gridOpenState[0];
         var setGridOpen = gridOpenState[1];
@@ -1475,6 +1596,21 @@ window.__ModuleLoader__.load({
         var flowBusyState = React.useState('');
         var flowBusy = flowBusyState[0];
         var setFlowBusy = flowBusyState[1];
+        var skillsState = React.useState([]);
+        var skills = skillsState[0];
+        var setSkills = skillsState[1];
+        var skillRecordingState = React.useState(false);
+        var skillRecording = skillRecordingState[0];
+        var setSkillRecording = skillRecordingState[1];
+        var skillNameState = React.useState('');
+        var skillName = skillNameState[0];
+        var setSkillName = skillNameState[1];
+        var skillTargetState = React.useState('');
+        var skillTarget = skillTargetState[0];
+        var setSkillTarget = skillTargetState[1];
+        var skillBusyState = React.useState('');
+        var skillBusy = skillBusyState[0];
+        var setSkillBusy = skillBusyState[1];
 
         var storageState = React.useState(null);
         var storage = storageState[0];
@@ -1674,6 +1810,11 @@ window.__ModuleLoader__.load({
           }
         }
         pillMeta.push('v' + CLIENT_VERSION);
+        var ownerSnapshot = snapshot && isObject(snapshot.owner) ? snapshot.owner : null;
+        if (ownerSnapshot) {
+          var ownerPillLabel = String(ownerSnapshot.label || ownerSnapshot.key || '').slice(0, 48);
+          if (ownerPillLabel) pillMeta.push(T('owner.pill', { label: ownerPillLabel }));
+        }
         var subtitleText = apkInfo
           ? T('apk.current', { name: apkInfo.label || apkInfo.packageName || apkInfo.path })
           : T('subtitle');
@@ -1738,8 +1879,10 @@ window.__ModuleLoader__.load({
           loadState();
           loadApks();
           loadInstances();
+          loadOwnership();
           loadDevices();
           loadFlows();
+          loadSkills();
           loadStorage();
           loadNetwork();
           var pollId = setInterval(function () {
@@ -1750,7 +1893,10 @@ window.__ModuleLoader__.load({
             });
           }, STATE_INTERVAL_MS);
           var instancePollId = setInterval(function () {
-            if (mountedRef.current) loadInstances();
+            if (mountedRef.current) {
+              loadInstances();
+              loadOwnership();
+            }
           }, 5000);
           return function () {
             mountedRef.current = false;
@@ -2181,6 +2327,8 @@ window.__ModuleLoader__.load({
           setInspectNodes([]);
           setInspectSelected(null);
           loadFlows();
+          loadSkills();
+          loadOwnership();
           setNetwork(null);
           loadNetwork();
           stopLiveLogcat();
@@ -2195,6 +2343,116 @@ window.__ModuleLoader__.load({
               setInstancesList(result.data.instances);
             }
             return result;
+          });
+        }
+
+        function loadOwnership() {
+          var id = activeInstanceRef.current || 'default';
+          return requestJson('/apk-vm/ownership?instanceId=' + encodeURIComponent(id), null, T).then(function (result) {
+            if (!mountedRef.current) return result;
+            if (result.ok && isObject(result.data)) setOwnership(result.data);
+            return result;
+          });
+        }
+
+        function panelOwnsCurrentVm() {
+          return Boolean(ownership && isObject(ownership.owner) && ownership.owner.key === panelOwnerKey());
+        }
+
+        function claimPanelOwner(force) {
+          if (ownerBusy) return;
+          var id = activeInstanceRef.current || 'default';
+          setOwnerBusy(true);
+          requestJson('/apk-vm/ownership', {
+            method: 'POST',
+            body: JSON.stringify({
+              action: 'claim',
+              instanceId: id,
+              ownerKey: panelOwnerKey(),
+              ownerScope: panelScope,
+              ownerLabel: '桌面面板',
+              force: force === true,
+            }),
+          }, T).then(function (result) {
+            if (!mountedRef.current) return;
+            setOwnerBusy(false);
+            if (!result.ok) {
+              pushToast('error', (result.error || T('err.action')).slice(0, 400));
+              loadOwnership();
+              return;
+            }
+            pushToast('success', T('owner.claimOk'));
+            loadOwnership();
+            loadState();
+          });
+        }
+
+        function releasePanelOwner() {
+          if (ownerBusy) return;
+          var id = activeInstanceRef.current || 'default';
+          var activeKey = ownership && isObject(ownership.owner) && String(ownership.owner.key || '').indexOf('panel:') === 0
+            ? ownership.owner.key
+            : panelOwnerKey();
+          setOwnerBusy(true);
+          requestJson('/apk-vm/ownership', {
+            method: 'POST',
+            body: JSON.stringify({ action: 'release', instanceId: id, ownerKey: activeKey }),
+          }, T).then(function (result) {
+            if (!mountedRef.current) return;
+            setOwnerBusy(false);
+            if (!result.ok) {
+              pushToast('error', (result.error || T('err.action')).slice(0, 400));
+              loadOwnership();
+              return;
+            }
+            pushToast('success', T('owner.releaseOk'));
+            loadOwnership();
+            loadState();
+          });
+        }
+
+        function changePanelScope(next) {
+          if ((next !== 'shared' && next !== 'conversation' && next !== 'project') || next === panelScope) return;
+          var id = activeInstanceRef.current || 'default';
+          var beforeKey = panelOwnerKey();
+          var owns = Boolean(ownership && isObject(ownership.owner) && ownership.owner.key === beforeKey);
+          try {
+            window.localStorage.setItem(PANEL_OWNER_SCOPE, next);
+          } catch (error) {
+            // ignore storage failures
+          }
+          setPanelScope(next);
+          if (!owns) {
+            loadOwnership();
+            return;
+          }
+          var afterKey = panelOwnerKey();
+          setOwnerBusy(true);
+          requestJson('/apk-vm/ownership', {
+            method: 'POST',
+            body: JSON.stringify({ action: 'release', instanceId: id, ownerKey: beforeKey }),
+          }, T).then(function (result) {
+            if (!mountedRef.current || !result.ok) return result;
+            return requestJson('/apk-vm/ownership', {
+              method: 'POST',
+              body: JSON.stringify({
+                action: 'claim',
+                instanceId: id,
+                ownerKey: afterKey,
+                ownerScope: next,
+                ownerLabel: '桌面面板',
+              }),
+            }, T);
+          }).then(function (result) {
+            if (!mountedRef.current) return;
+            setOwnerBusy(false);
+            if (!result || !result.ok) {
+              pushToast('error', ((result && result.error) || T('err.action')).slice(0, 400));
+            } else {
+              pushToast('success', T('owner.claimOk'));
+            }
+            loadOwnership();
+            loadState();
           });
         }
 
@@ -2516,8 +2774,87 @@ window.__ModuleLoader__.load({
           });
         }
 
-        function toggleMaximized() {
-          setIsMaximized(function (value) {
+        function skillPath() {
+          var id = activeInstanceRef.current || 'default';
+          return id === 'default'
+            ? '/apk-vm/skills'
+            : '/apk-vm/instances/' + encodeURIComponent(id) + '/skills';
+        }
+
+        function loadSkills() {
+          return requestJson(skillPath(), null, T).then(function (result) {
+            if (!mountedRef.current) return;
+            if (result.ok && isObject(result.data) && Array.isArray(result.data.skills)) {
+              setSkills(result.data.skills);
+              setSkillRecording(Boolean(result.data.recording));
+            }
+          });
+        }
+
+        function toggleSkillRecording() {
+          var starting = !skillRecording;
+          var action = starting ? 'start' : 'stop';
+          requestJson(skillPath(), {
+            method: 'POST',
+            body: JSON.stringify({ action: action, name: skillName || '', targetCode: skillTarget || '' }),
+          }, T).then(function (result) {
+            if (!mountedRef.current) return;
+            if (!result.ok) {
+              pushToast('error', T('err.action') + ': ' + result.error);
+              return;
+            }
+            setSkillRecording(starting);
+            if (!starting) {
+              setSkillName('');
+              loadSkills();
+              pushToast('success', T('skill.saved', { name: (result.data && result.data.skill && result.data.skill.name) || 'Skill' }));
+            } else {
+              pushToast('success', T('skill.recording'));
+            }
+          });
+        }
+
+        function runAppSkill(skill) {
+          if (!skill || !skill.id || skillBusy) return;
+          setSkillBusy(skill.id);
+          requestJson(skillPath(), {
+            method: 'POST',
+            body: JSON.stringify({
+              action: 'run',
+              skillId: skill.id,
+              untilCode: skillTarget || skill.target || '',
+              speed: 1.5,
+            }),
+          }, T).then(function (result) {
+            if (!mountedRef.current) return;
+            setSkillBusy('');
+            if (!result.ok) {
+              pushToast('error', T('skill.failed') + ': ' + result.error);
+              return;
+            }
+            var data = result.data && result.data.result ? result.data.result : {};
+            pushToast('success', T('skill.done', { name: skill.name, n: data.stepsRun || 0 }));
+          });
+        }
+
+        function deleteAppSkill(skill) {
+          if (!skill || !skill.id || skillBusy) return;
+          setSkillBusy(skill.id);
+          requestJson(skillPath(), {
+            method: 'POST',
+            body: JSON.stringify({ action: 'delete', skillId: skill.id }),
+          }, T).then(function (result) {
+            if (!mountedRef.current) return;
+            setSkillBusy('');
+            if (!result.ok) {
+              pushToast('error', T('err.action') + ': ' + result.error);
+              return;
+            }
+            loadSkills();
+          });
+        }
+
+        function toggleMaximized() {          setIsMaximized(function (value) {
             var next = !value;
             writeUiFlag('apk-vm.maximized', next);
             return next;
@@ -2639,6 +2976,18 @@ window.__ModuleLoader__.load({
               setForwardRemote('');
               setForwardShared(false);
             }
+          });
+        }
+
+        function applyPortPreset(preset) {
+          if (!preset) return;
+          setForwardLocal(String(preset.localPort));
+          setForwardRemote(String(preset.remotePort));
+          setForwardShared(false);
+          networkAction('forward-add', {
+            localPort: preset.localPort,
+            remotePort: preset.remotePort,
+            shared: false,
           });
         }
 
@@ -3587,9 +3936,14 @@ window.__ModuleLoader__.load({
           var id = activeInstanceRef.current || 'default';
           var path = id === 'default' ? '/apk-vm/touch' : '/apk-vm/instances/' + encodeURIComponent(id) + '/touch';
           try {
+            var touchHeaders = { 'content-type': 'application/json' };
+            var ownerHeaders = panelOwnerHeaders();
+            for (var ownerHeader in ownerHeaders) {
+              if (Object.prototype.hasOwnProperty.call(ownerHeaders, ownerHeader)) touchHeaders[ownerHeader] = ownerHeaders[ownerHeader];
+            }
             fetch(path, {
               method: 'POST',
-              headers: { 'content-type': 'application/json' },
+              headers: touchHeaders,
               body: JSON.stringify({ action: action, pointerId: pointerId, x: point.x, y: point.y }),
               cache: 'no-store',
             }).catch(function () {});
@@ -4246,7 +4600,7 @@ window.__ModuleLoader__.load({
           color: rootActive ? 'var(--dsw-alias-state-success-primary)' : 'var(--dsw-alias-label-secondary)',
           whiteSpace: 'nowrap',
         };
-        var instancesCard = instancesList.length > 1
+        var instancesCard = instancesList.length > 0
           ? h(
               'details',
               { className: 'apkvm-card apkvm-instances' },
@@ -4262,7 +4616,13 @@ window.__ModuleLoader__.load({
                 { className: 'apkvm-instlist' },
                 instancesList.map(function (entry) {
                   var isDefault = entry.id === 'default';
-                  var owner = entry.owner ? String(entry.owner).replace(/^agent-/, '').slice(0, 14) : '';
+                  var ownerInfo = entry.ownerInfo && isObject(entry.ownerInfo) ? entry.ownerInfo : null;
+                  var owner = ownerInfo
+                    ? String(ownerInfo.label || ownerInfo.key || '')
+                    : entry.owner ? String(entry.owner).replace(/^agent-/, '').slice(0, 14) : '';
+                  var ownerScope = ownerInfo && ownerInfo.scope && ownerInfo.scope !== 'shared'
+                    ? ' · ' + T('owner.' + ownerInfo.scope)
+                    : '';
                   var idle = Number(entry.idleMs) >= 0 ? Math.max(0, Math.round(Number(entry.idleMs) / 1000)) : null;
                   return h(
                     'div',
@@ -4271,7 +4631,7 @@ window.__ModuleLoader__.load({
                       'div',
                       { className: 'apkvm-instname', title: entry.id },
                       isDefault ? T('instances.default') : entry.id,
-                      h('span', { className: 'apkvm-dim' }, ' · ' + (entry.state || '?') + (owner ? ' · ' + owner : ''))
+                      h('span', { className: 'apkvm-dim' }, ' · ' + (entry.state || '?') + (owner ? ' · ' + owner + ownerScope : ''))
                     ),
                     h(
                       'div',
@@ -4315,6 +4675,83 @@ window.__ModuleLoader__.load({
               )
             )
           : null;
+
+        var currentOwner = ownership && isObject(ownership.owner) ? ownership.owner : null;
+        var panelOwns = Boolean(currentOwner && currentOwner.key === panelOwnerKey());
+        var ownerLabel = currentOwner ? String(currentOwner.label || currentOwner.key) : T('owner.none');
+        var ownerCard = h(
+          'details',
+          { className: 'apkvm-card apkvm-owner', open: true },
+          h(
+            'summary',
+            { className: 'apkvm-debug-summary' },
+            h('span', { className: 'apkvm-card-title' }, T('owner.title')),
+            h('span', { className: 'apkvm-dim', style: { marginLeft: 'auto' } }, ownerLabel),
+            h('span', { className: 'apkvm-chevron', 'aria-hidden': 'true' }, '▸')
+          ),
+          h(
+            'div',
+            { className: 'apkvm-ownerbody' },
+            h(
+              'div',
+              { className: 'apkvm-ownerrow' },
+              h('span', { className: 'apkvm-dim' }, T('owner.pill', { label: ownerLabel })),
+              currentOwner && !panelOwns
+                ? h('span', { className: 'apkvm-dim' }, ' · ' + T('owner.busy', { label: ownerLabel }))
+                : null
+            ),
+            h(
+              'div',
+              { className: 'apkvm-ownercontrols' },
+              h('span', { className: 'apkvm-dim' }, T('owner.scope')),
+              ['shared', 'conversation', 'project'].map(function (scope) {
+                return h(
+                  'button',
+                  {
+                    key: scope,
+                    type: 'button',
+                    className: 'apkvm-mini' + (panelScope === scope ? ' active' : ''),
+                    disabled: ownerBusy,
+                    onClick: function (event) {
+                      event.preventDefault();
+                      changePanelScope(scope);
+                    },
+                  },
+                  T('owner.' + scope)
+                );
+              }),
+              h(
+                'button',
+                {
+                  type: 'button',
+                  className: 'apkvm-mini',
+                  disabled: ownerBusy || panelOwns,
+                  onClick: function (event) {
+                    event.preventDefault();
+                    claimPanelOwner(false);
+                  },
+                },
+                T('owner.claim')
+              ),
+              h(
+                'button',
+                {
+                  type: 'button',
+                  className: 'apkvm-mini',
+                  disabled: ownerBusy || !panelOwns,
+                  onClick: function (event) {
+                    event.preventDefault();
+                    releasePanelOwner();
+                  },
+                },
+                T('owner.release')
+              )
+            ),
+            currentOwner && !panelOwns
+              ? h('div', { className: 'apkvm-dim' }, T('owner.forceHint'))
+              : null
+          )
+        );
 
         var appsCard = h(
           'details',
@@ -4733,6 +5170,94 @@ window.__ModuleLoader__.load({
           )
         );
 
+        var skillCard = h(
+          'details',
+          { className: 'apkvm-card apkvm-debug' },
+          h(
+            'summary',
+            { className: 'apkvm-debug-summary' },
+            h('span', { className: 'apkvm-card-title' }, T('skill.title')),
+            h('span', { className: 'apkvm-tag' + (skillRecording ? ' ok' : '') }, skillRecording ? T('skill.recording') : T('flow.count', { n: skills.length })),
+            h('span', { className: 'apkvm-chevron', 'aria-hidden': 'true' }, '▸')
+          ),
+          h(
+            'div',
+            { className: 'apkvm-debug-body' },
+            h(
+              'div',
+              { style: { display: 'flex', alignItems: 'center', gap: '6px' } },
+              h('input', {
+                className: 'apkvm-input',
+                type: 'text',
+                value: skillName,
+                placeholder: T('skill.name'),
+                disabled: skillRecording,
+                onChange: function (event) {
+                  setSkillName(event && event.target ? String(event.target.value) : '');
+                },
+                'aria-label': T('skill.name'),
+              }),
+              actionBtn(skillRecording ? T('skill.stop') : T('skill.start'), {
+                key: 'skill-record',
+                small: true,
+                variant: skillRecording ? 'danger' : 'primary',
+                disabled: !ready,
+                onClick: toggleSkillRecording,
+              })
+            ),
+            h('input', {
+              className: 'apkvm-input',
+              type: 'text',
+              value: skillTarget,
+              placeholder: T('skill.target'),
+              onChange: function (event) {
+                setSkillTarget(event && event.target ? String(event.target.value) : '');
+              },
+              'aria-label': T('skill.target'),
+            }),
+            skills.length
+              ? h(
+                  'div',
+                  { className: 'apkvm-list', style: { maxHeight: '150px' } },
+                  skills.slice(0, 12).map(function (skill) {
+                    return h(
+                      'div',
+                      { className: 'apkvm-apk', key: skill.id },
+                      h('span', { className: 'apkvm-apk-name', title: skill.description || skill.id }, skill.name || skill.id),
+                      h(
+                        'span',
+                        { style: { display: 'flex', flexDirection: 'column', gap: '4px', alignItems: 'flex-end' } },
+                        h('span', { className: 'apkvm-dim' }, T('skill.meta', { n: skill.steps || 0, codes: skill.codes || 0 })),
+                        h(
+                          'span',
+                          { style: { display: 'flex', gap: '5px' } },
+                          actionBtn(T('skill.run'), {
+                            key: 'skill-run-' + skill.id,
+                            small: true,
+                            disabled: !ready || Boolean(skillBusy),
+                            onClick: function () {
+                              runAppSkill(skill);
+                            },
+                          }),
+                          actionBtn(T('skill.delete'), {
+                            key: 'skill-delete-' + skill.id,
+                            small: true,
+                            variant: 'danger',
+                            disabled: Boolean(skillBusy),
+                            onClick: function () {
+                              deleteAppSkill(skill);
+                            },
+                          })
+                        )
+                      )
+                    );
+                  })
+                )
+              : h('div', { className: 'apkvm-dim' }, T('skill.empty')),
+            h('div', { className: 'apkvm-dim', style: { whiteSpace: 'normal' } }, T('skill.hint'))
+          )
+        );
+
         var networkCard = h(
           'details',
           { className: 'apkvm-card apkvm-debug' },
@@ -4867,6 +5392,21 @@ window.__ModuleLoader__.load({
                   );
                 })
               : h('div', { className: 'apkvm-dim' }, T('network.forwards')),
+            h(
+              'div',
+              { style: { display: 'flex', alignItems: 'center', gap: '5px', flexWrap: 'wrap' } },
+              h('span', { className: 'apkvm-dim' }, T('network.presets')),
+              PORT_PRESETS.map(function (preset) {
+                return actionBtn(preset.label, {
+                  key: 'forward-preset-' + preset.key,
+                  small: true,
+                  disabled: !ready || Boolean(networkBusy),
+                  onClick: function () {
+                    applyPortPreset(preset);
+                  },
+                });
+              })
+            ),
             h(
               'div',
               { style: { display: 'flex', alignItems: 'center', gap: '5px' } },
@@ -5741,8 +6281,10 @@ window.__ModuleLoader__.load({
               setupCard,
               apkCard,
               instancesCard,
+              ownerCard,
               debugCard,
               flowCard,
+              skillCard,
               networkCard,
               storageCard,
               snapshotCard,
