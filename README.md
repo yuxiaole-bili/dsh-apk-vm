@@ -45,7 +45,7 @@ same-origin, loopback-only debug HTTP API and an `apk_vm` Agent tool.
 > 当前 **Windows x64 与 Linux x86_64（headless）为端到端已验证平台**；macOS 仅做探测/CI
 > 覆盖，详见 `docs/LINUX-E2E.md`。
 
-**Status:** `0.10.0` · Apache-2.0 · no npm runtime dependencies · no build step.
+**Status:** `0.10.1` · Apache-2.0 · no npm runtime dependencies · no build step.
 
 This is an open-source DSH plugin published on npm as **`dsh-apk-vm`**. Repository:
 [github.com/yuxiaole-bili/dsh-apk-vm](https://github.com/yuxiaole-bili/dsh-apk-vm).
@@ -350,7 +350,9 @@ or `project`), session id, workspace, and `since` / `lastSeenAt` timestamps; lea
   `GET /apk-vm/state` and `GET /apk-vm/instances` include owner metadata.
 - When the panel makes a mutating HTTP request it sends
   `x-apk-vm-owner`, `x-apk-vm-scope`, `x-apk-vm-session`, `x-apk-vm-workspace` and
-  `x-apk-vm-label`. A request that supplies an owner header auto-claims a free VM; on a leased VM
+  `x-apk-vm-label`. Header values may be percent-encoded (UTF-8); the Host decodes them, so
+  non-ASCII labels and workspace paths remain valid for browser `fetch`. A request that
+  supplies an owner header auto-claims a free VM; on a leased VM
   it must match the current owner key. `POST /apk-vm/*` control routes return `409 vm-busy` with
   the current owner when the header is missing or does not match. Read-only `GET` routes are
   never blocked.

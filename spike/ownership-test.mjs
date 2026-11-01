@@ -176,6 +176,16 @@ console.log('ownership: HTTP owner guard');
   eq(incoming.sessionId, 'sess-1', 'HTTP owner session parsed');
   eq(incoming.workspace, 'D:\\work\\app', 'HTTP owner workspace parsed');
   eq(incoming.label, '桌面面板', 'HTTP owner label parsed');
+  const encoded = ownerFromHttp(
+    {
+      'x-apk-vm-owner': 'panel',
+      'x-apk-vm-workspace': encodeURIComponent('D:\\滚木\\项目'),
+      'x-apk-vm-label': encodeURIComponent('桌面面板'),
+    },
+    new URLSearchParams()
+  );
+  eq(encoded.workspace, 'D:\\滚木\\项目', 'percent-encoded workspace header is decoded');
+  eq(encoded.label, '桌面面板', 'percent-encoded label header is decoded');
   eq(ownerFromHttp({}, new URLSearchParams()), null, 'no owner header means anonymous caller');
 
   const lease = { ...publicOwner(createOwner({ scope: 'conversation', sessionId: 'sess-1', label: '桌面面板' })), key: incoming.key };

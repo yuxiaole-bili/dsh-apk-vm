@@ -30,7 +30,7 @@ window.__ModuleLoader__.load({
     var SWIPE_THRESHOLD_PX = 24;
     var FRAME_INTERVAL_MS = 500;
     var STATE_INTERVAL_MS = 2000;
-    var CLIENT_VERSION = '0.10.0';
+    var CLIENT_VERSION = '0.10.1';
 
     /* ------------------------------------------------------------------ *
      * Optional dsh-better-sidebar integration.
@@ -850,7 +850,7 @@ window.__ModuleLoader__.load({
       return {
         'x-apk-vm-owner': panelOwnerKey(),
         'x-apk-vm-scope': panelOwnerScope(),
-        'x-apk-vm-label': '桌面面板',
+        'x-apk-vm-label': encodeURIComponent('桌面面板'),
       };
     }
 

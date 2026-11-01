@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.10.1
+
+Fix panel requests failing with non-ISO-8859-1 header values.
+
+### Fixed
+
+- Percent-encode the panel owner label before sending it as `x-apk-vm-label`, so Chromium
+  `fetch` no longer rejects requests with `String contains non ISO-8859-1 code point`.
+- Decode percent-encoded owner HTTP headers/query values on the Host, including Chinese
+  workspace paths and labels.
+
 ## 0.10.0
 
 VM ownership and dedicated conversation/project VMs.
