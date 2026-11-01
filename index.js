@@ -951,9 +951,19 @@ export function apply(ctx, config = {}) {
       }
     }
 
+    function isLoopbackRequest(req) {
+      const address = String((req && req.socket && req.socket.remoteAddress) || '');
+      return address === '127.0.0.1' || address === '::1' || address.startsWith('::ffff:127.');
+    }
+
     function httpOwnerFromRequest(req) {
       const values = ownerFromHttp(req.headers || {}, requestQuery(req));
-      return values ? instanceManager.ownerFor(values) : null;
+      if (!values) return null;
+      const owner = instanceManager.ownerFor(values);
+      // Admin is a local-panel privilege only. A remote/forwarded request may
+      // still identify itself, but it is downgraded to a normal owner.
+      if (owner.role === 'admin' && !isLoopbackRequest(req)) owner.role = 'user';
+      return owner;
     }
 
     function assertHttpOwner(req, res, instanceId = 'default') {
@@ -1559,16 +1569,18 @@ export function apply(ctx, config = {}) {
         sessionId: body.sessionId || (body.owner && body.owner.sessionId) || null,
         workspace: body.workspace || (body.owner && body.owner.workspace) || null,
         label: body.ownerLabel || body.label || (body.owner && body.owner.label) || '桌面面板',
+        role: body.role || body.ownerRole || (body.owner && body.owner.role) || 'user',
         source: 'panel',
       });
       try {
+        const admin = owner.role === 'admin';
         if (action === 'claim') {
-          const result = instanceManager.claimOwner(instanceId, owner, { force: body.force === true });
+          const result = instanceManager.claimOwner(instanceId, owner, { force: body.force === true || admin });
           sendJson(res, 200, { ok: true, instanceId, ...result });
           return;
         }
         if (action === 'release') {
-          const released = instanceManager.releaseOwner(instanceId, owner, { force: body.force === true });
+          const released = instanceManager.releaseOwner(instanceId, owner, { force: body.force === true || admin });
           sendJson(res, 200, { ok: true, instanceId, released });
           return;
         }

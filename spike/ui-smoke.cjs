@@ -585,6 +585,10 @@ const Page = pageElement ? pageElement.type : null;
       lastText.indexOf('VM usage') !== -1 && lastText.indexOf('Scope') !== -1
   );
   check(
+    'VM usage card shows administrator mode',
+    lastText.indexOf('Administrator — can operate every VM') !== -1
+  );
+  check(
     'toolbar shows Home/Back/Recents/Power',
     !!buttonWithText(tree, 'Home') && !!buttonWithText(tree, 'Back') && !!buttonWithText(tree, 'Recents') && !!buttonWithText(tree, 'Power')
   );
@@ -603,10 +607,22 @@ const Page = pageElement ? pageElement.type : null;
     vmPost && String(vmPost.init.body)
   );
   const panelOwnerHeader = vmPost && vmPost.init.headers && vmPost.init.headers['x-apk-vm-owner'];
+  const panelRoleHeader = vmPost && vmPost.init.headers && vmPost.init.headers['x-apk-vm-role'];
   check(
     'mutating requests carry the panel owner header',
     typeof panelOwnerHeader === 'string' && panelOwnerHeader.indexOf('panel:') === 0,
     panelOwnerHeader
+  );
+  check(
+    'mutating requests carry the administrator role',
+    panelRoleHeader === 'admin',
+    panelRoleHeader
+  );
+  const panelLabelHeader = vmPost && vmPost.init.headers && vmPost.init.headers['x-apk-vm-label'];
+  check(
+    'panel owner label header is percent-encoded',
+    typeof panelLabelHeader === 'string' && panelLabelHeader.indexOf('%') !== -1,
+    panelLabelHeader
   );
 
   /* Drive: Home key -> POST /apk-vm/input {type:'key', key:'home'} */

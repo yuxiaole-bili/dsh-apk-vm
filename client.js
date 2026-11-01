@@ -30,7 +30,7 @@ window.__ModuleLoader__.load({
     var SWIPE_THRESHOLD_PX = 24;
     var FRAME_INTERVAL_MS = 500;
     var STATE_INTERVAL_MS = 2000;
-    var CLIENT_VERSION = '0.10.1';
+    var CLIENT_VERSION = '0.10.2';
 
     /* ------------------------------------------------------------------ *
      * Optional dsh-better-sidebar integration.
@@ -126,6 +126,7 @@ window.__ModuleLoader__.load({
       'owner.busy': 'in use by {label}',
       'owner.scope': 'Scope',
       'owner.forceHint': 'Another owner holds this VM; release it first.',
+      'owner.admin': 'Administrator — can operate every VM',
       'action.start': 'Start VM',
       'action.starting': 'Starting…',
       'action.stop': 'Stop',
@@ -443,6 +444,7 @@ window.__ModuleLoader__.load({
       'owner.busy': '被 {label} 占用',
       'owner.scope': '范围',
       'owner.forceHint': '其他使用者正在占用，请先释放。',
+      'owner.admin': '管理员 · 可操作所有虚拟机',
       'action.start': '启动虚拟机',
       'action.starting': '正在启动…',
       'action.stop': '停止',
@@ -850,7 +852,8 @@ window.__ModuleLoader__.load({
       return {
         'x-apk-vm-owner': panelOwnerKey(),
         'x-apk-vm-scope': panelOwnerScope(),
-        'x-apk-vm-label': encodeURIComponent('桌面面板'),
+        'x-apk-vm-role': 'admin',
+        'x-apk-vm-label': encodeURIComponent('桌面管理员'),
       };
     }
 
@@ -4692,6 +4695,7 @@ window.__ModuleLoader__.load({
           h(
             'div',
             { className: 'apkvm-ownerbody' },
+            h('div', { className: 'apkvm-owneradmin' }, T('owner.admin')),
             h(
               'div',
               { className: 'apkvm-ownerrow' },

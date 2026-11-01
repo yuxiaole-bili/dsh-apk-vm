@@ -176,6 +176,22 @@ console.log('ownership: HTTP owner guard');
   eq(incoming.sessionId, 'sess-1', 'HTTP owner session parsed');
   eq(incoming.workspace, 'D:\\work\\app', 'HTTP owner workspace parsed');
   eq(incoming.label, '桌面面板', 'HTTP owner label parsed');
+  const admin = ownerFromHttp(
+    {
+      'x-apk-vm-owner': 'panel:admin',
+      'x-apk-vm-role': 'admin',
+      'x-apk-vm-label': encodeURIComponent('桌面管理员'),
+    },
+    new URLSearchParams()
+  );
+  eq(admin.role, 'admin', 'HTTP admin role parsed');
+  eq(admin.label, '桌面管理员', 'percent-encoded admin label decoded');
+  const adminLease = { ...publicOwner(createOwner({ scope: 'shared', label: 'Agent A' })), key: 'agent:a' };
+  const adminAccess = checkOwnerAccess(adminLease, admin, 'default');
+  eq(adminAccess.ok, true, 'admin bypasses a foreign lease');
+  eq(adminAccess.admin, true, 'admin access is marked');
+  eq(adminAccess.autoClaim, false, 'admin does not auto-claim or steal the lease');
+  eq(adminAccess.touch, false, 'admin does not refresh the agent lease');
   const encoded = ownerFromHttp(
     {
       'x-apk-vm-owner': 'panel',

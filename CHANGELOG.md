@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.10.2
+
+Panel administrator mode and owner-header compatibility.
+
+### Added
+
+- The human Web panel is now an **administrator** owner: it may operate any VM even when an
+  Agent conversation holds the lease. Admin requests bypass the `409 vm-busy` guard but do not
+  steal or refresh the agent lease.
+- `x-apk-vm-role: admin` is accepted only from loopback requests; non-loopback callers are
+  downgraded to `user`. `ownerStatus`, `ownerLabel` and the panel usage card expose the role.
+
+### Fixed
+
+- Browser `fetch` no longer rejects the panel owner label with `String contains non
+  ISO-8859-1 code point`; labels and workspace paths are percent-encoded and decoded on Host.
+- Panel **Claim** / **Release** actions force ownership for the local admin, so the human can
+  recover control of a VM held by an Agent.
+
 ## 0.10.1
 
 Fix panel requests failing with non-ISO-8859-1 header values.

@@ -45,7 +45,7 @@ same-origin, loopback-only debug HTTP API and an `apk_vm` Agent tool.
 > 当前 **Windows x64 与 Linux x86_64（headless）为端到端已验证平台**；macOS 仅做探测/CI
 > 覆盖，详见 `docs/LINUX-E2E.md`。
 
-**Status:** `0.10.1` · Apache-2.0 · no npm runtime dependencies · no build step.
+**Status:** `0.10.2` · Apache-2.0 · no npm runtime dependencies · no build step.
 
 This is an open-source DSH plugin published on npm as **`dsh-apk-vm`**. Repository:
 [github.com/yuxiaole-bili/dsh-apk-vm](https://github.com/yuxiaole-bili/dsh-apk-vm).
@@ -345,6 +345,10 @@ or `project`), session id, workspace, and `since` / `lastSeenAt` timestamps; lea
 - The VM instances card shows the current owner/scope. The **VM usage** card in the panel
   shows a readable owner label and provides **Claim**, **Release** and a `shared` /
   `conversation` / `project` scope control for the human user.
+- The Web panel is an administrator: it can operate a VM held by an Agent conversation and may
+  force **Claim** / **Release**, while ordinary Agent calls still get `409 vm-busy`. The panel
+  sends `x-apk-vm-role: admin`; the Host accepts that role only from loopback requests and
+  downgrades non-local callers to `user`.
 - `owner_status` lists default/extra VM leases; `claim_vm` and `release_vm` manage them.
   HTTP: `GET|POST /apk-vm/ownership` (`status`, `claim`, `release`, `touch`), while
   `GET /apk-vm/state` and `GET /apk-vm/instances` include owner metadata.
