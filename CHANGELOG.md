@@ -1,5 +1,43 @@
 # Changelog
 
+## 0.11.0
+
+WebView/CDP control, reliable tool JSON, CSS-coordinate input, Unicode typing and reboot-safe network state.
+
+### Added
+
+- **Native WebView control over Chrome DevTools Protocol.** New `lib/cdp.js` discovers
+  `webview_devtools_remote` sockets through adb, forwards them on loopback, and exposes
+  `webview list|eval|click|wait_for|insert_text|info`. Selectors support ordinary CSS and
+  `testid:VALUE` for `[data-testid="VALUE"]`, including nested **open** shadow roots.
+  Each Agent call owns a short-lived CDP connection; targets are sanitized and WebSocket URLs
+  are never returned to the model.
+- `tap_css` clicks by CSS viewport coordinates, applying `info.coordinateMap`
+  (`device = round(css * dpr) + offset`) so callers do not hand-calculate a status bar.
+- `tap_selector` resolves a DOM selector to a CDP mouse click.
+- `type_text` sends UTF-8/Unicode text through the existing scrcpy control stream (Chinese,
+  emoji and other non-ASCII input no longer depend on ADBKeyboard).
+- `wait_for` supports selector, HTTP, UI-text and seconds conditions with polling instead of
+  blind sleeps.
+- `screenshot` accepts `overlay:true` (and `/apk-vm/debug/screenshot?overlay=1`) to draw
+  UIAutomator interactive-node boxes on the PNG and return the matching boxes.
+- `networkAction=reverse-add|reverse-remove|reverse-list` manages guest→host `adb reverse`.
+- `networkAction=validate` reports Android's `VALIDATED`/`INTERNET` state and gives a clear
+  WebView hint when the captive-portal probe has not passed.
+- `networkInfo` now includes reverse forwards and connectivity validation.
+- `env_snapshot` and `env_restore` capture/re-apply network mode, proxy, DNS intent, hosts and
+  forwards. `reboot` schedules this automatically after `sys.boot_completed`.
+- `adb` runs a raw adb argv and returns structured `stdout`/`stderr`/`exit`.
+- `info` now reports adb path, external-device flag, physical/override size, density, `dpr`,
+  stable-inset status bar, rotation and a ready-to-use coordinate map.
+
+### Fixed
+
+- `apk_vm` no longer returns invalid/lossless-JSON errors: `lib/json-safe.js` normalizes
+  `undefined`, `NaN`/`Infinity`, bigint, Buffer/TypedArray, Date, Error and cyclic values before
+  every tool result.
+- Tools relying on scrcpy can type Unicode without changing the input protocol.
+
 ## 0.10.2
 
 Panel administrator mode and owner-header compatibility.

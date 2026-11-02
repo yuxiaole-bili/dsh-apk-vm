@@ -29,6 +29,7 @@ import { ScrcpySession, annexbToAvcc, CONTROL_MESSAGE_TYPE } from './lib/scrcpy.
 import { detectEnvironment, createAvd, installSystemImage, installSdkPackages, bootstrapSdk, DEFAULT_SYSTEM_IMAGE } from './lib/setup.js';
 import { acceptWebSocket } from './lib/ws.js';
 import { parseUiHierarchy, decorateUiNodes, buildInspectorPayload, snapshotIdForXml } from './lib/ui-inspector.js';
+import { annotateScreenshot } from './lib/png-annotate.js';
 import { FlowRecorder } from './lib/flows.js';
 import { normalizeCodebook, resolveControl, suggestFeatures } from './lib/control-codebook.js';
 import { attachNodeImageFeatures } from './lib/image-features.js';
@@ -38,6 +39,8 @@ import { buildApksFromAab, aabInfo, detectBundletool } from './lib/aab.js';
 import { readHarFile, summarizeHar, filterHar, toCurl } from './lib/har.js';
 import { runAssertions, compareScreenshot, createTestReport, reportMarkdown } from './lib/ui-tests.js';
 import { SshAdbTunnel } from './lib/remote.js';
+import { CdpBridge } from './lib/cdp.js';
+import { losslessJson } from './lib/json-safe.js';
 
 const PLUGIN_VERSION = (() => {
   try {
@@ -64,6 +67,11 @@ const SCREEN_TTL_MS = 15_000;
 function isReady(vm) {
   return vm && vm.state === 'ready';
 }
+
+/**
+ * Tool results must survive a lossless JSON round-trip. The shared helper
+ * converts values that JSON cannot represent without failing the whole action.
+ */
 
 function sendJson(res, status, body) {
   const text = JSON.stringify(body);
@@ -297,6 +305,7 @@ export function apply(ctx, config = {}) {
   let registerInstanceRoutes = null;
   let disposeInstanceRoutes = null;
   const flowRecorder = new FlowRecorder();
+  const cdpBridges = new Map();
   if (instanceManager) {
     instanceManager.onCreated = (id) => {
       registerInstanceRoutes?.(id);
@@ -941,6 +950,7 @@ export function apply(ctx, config = {}) {
       '/apk-vm/debug/proxy',
       '/apk-vm/debug/ca',
       '/apk-vm/debug/record',
+      '/apk-vm/debug/env',
     ]);
 
     function requestQuery(req) {
@@ -1857,9 +1867,13 @@ export function apply(ctx, config = {}) {
           else if (action === 'dns') result = await instance.vm.setDnsServers(body.servers);
           else if (action === 'hosts') result = await instance.vm.setHosts(body.entries);
           else if (action === 'test') result = await instance.vm.testNetwork(body);
+          else if (action === 'validate') result = await instance.vm.networkValidation();
           else if (action === 'pcap') result = instance.vm.setTcpdumpPath(body.path);
           else if (action === 'forward-add') result = await instance.vm.addPortForward(body.localPort, body.remotePort, { shared: body.shared === true });
           else if (action === 'forward-remove') result = await instance.vm.removePortForward(body.localPort);
+          else if (action === 'reverse-add') result = await instance.vm.addReverse(body.localPort, body.hostPort || body.remotePort);
+          else if (action === 'reverse-remove') result = await instance.vm.removeReverse(body.localPort);
+          else if (action === 'reverse-list') result = { ok: true, reverses: instance.vm.listReverseForwards() };
           else throw new Error(`unsupported network action: ${action || '(missing)'}`);
           sendJson(res, 200, result);
         } catch (error) {
@@ -2647,6 +2661,27 @@ export function apply(ctx, config = {}) {
       sendJson(res, 200, await vm.deviceInfo());
     });
 
+    register('/apk-vm/debug/env', async (req, res) => {
+      if (req.method !== 'POST') {
+        sendError(res, 405, 'POST only');
+        return;
+      }
+      const body = await readJsonBody(req);
+      const action = String(body.action || '').toLowerCase();
+      try {
+        if (action === 'capture') {
+          sendJson(res, 200, { ok: true, snapshot: await vm.captureEnv() });
+        } else if (action === 'restore') {
+          if (!body.envSnapshot || typeof body.envSnapshot !== 'object') throw new Error('restore requires envSnapshot');
+          sendJson(res, 200, await vm.restoreEnv(body.envSnapshot));
+        } else {
+          throw new Error('action must be capture or restore');
+        }
+      } catch (error) {
+        sendError(res, 400, error.message);
+      }
+    });
+
     register('/apk-vm/debug/shell', async (req, res) => {
       if (req.method !== 'POST') {
         sendError(res, 405, 'POST only');
@@ -2953,9 +2988,13 @@ export function apply(ctx, config = {}) {
         else if (action === 'dns') result = await vm.setDnsServers(body.servers);
         else if (action === 'hosts') result = await vm.setHosts(body.entries);
         else if (action === 'test') result = await vm.testNetwork(body);
+        else if (action === 'validate') result = await vm.networkValidation();
         else if (action === 'pcap') result = vm.setTcpdumpPath(body.path);
         else if (action === 'forward-add') result = await vm.addPortForward(body.localPort, body.remotePort, { shared: body.shared === true });
         else if (action === 'forward-remove') result = await vm.removePortForward(body.localPort);
+        else if (action === 'reverse-add') result = await vm.addReverse(body.localPort, body.hostPort || body.remotePort);
+        else if (action === 'reverse-remove') result = await vm.removeReverse(body.localPort);
+        else if (action === 'reverse-list') result = { ok: true, reverses: vm.listReverseForwards() };
         else throw new Error(`unsupported network action: ${action || '(missing)'}`);
         sendJson(res, 200, result);
       } catch (error) {
@@ -3039,7 +3078,16 @@ export function apply(ctx, config = {}) {
         return;
       }
       if (!(await ensureDebugReady(res))) return;
-      const png = await vm.screenshot();
+      let png = await vm.screenshot();
+      try {
+        const url = new URL(req.url || '/', 'http://127.0.0.1');
+        if (url.searchParams.get('overlay') === '1') {
+          const dump = await vm.uiDump();
+          png = annotateScreenshot(png, parseUiHierarchy(dump.xml).nodes).buffer;
+        }
+      } catch {
+        /* keep the plain screenshot on overlay failure */
+      }
       res.writeHead(200, {
         'Content-Type': 'image/png',
         'Content-Length': png.length,
@@ -3098,6 +3146,8 @@ export function apply(ctx, config = {}) {
       void stopScrcpy();
       void cleanupUploads();
       for (const id of [...extraRouteDisposers.keys()]) disposeExtraRouteSet(id);
+      for (const bridge of cdpBridges.values()) void bridge.close().catch(() => {});
+      cdpBridges.clear();
       void instanceManager?.dispose?.();
       for (const dispose of disposers.reverse()) {
         try {
@@ -3157,6 +3207,56 @@ export function apply(ctx, config = {}) {
    * can call `apk_vm` for root shell / logcat / props / packages / APK install
    * / push-pull / reboot, without duplicating plugin logic.                 */
 
+  function cdpFor(api) {
+    const key = `${api.kind}:${api.id}`;
+    let bridge = cdpBridges.get(key);
+    if (!bridge) {
+      bridge = new CdpBridge({
+        adb: (args, options) => api.adb(args, options),
+        serial: () => api.serial(),
+        timeoutMs: 15_000,
+      });
+      cdpBridges.set(key, bridge);
+    }
+    return bridge;
+  }
+
+  function webviewDescriptor(value) {
+    if (value == null || value === '') return null;
+    if (typeof value === 'number') return value >= 1 ? value - 1 : value;
+    const text = String(value).trim();
+    if (/^\d+$/.test(text)) return Math.max(0, Number(text) - 1);
+    if (/^(https?|file|about):/i.test(text)) return { urlContains: text };
+    return text;
+  }
+
+  async function withCdpSession(api, options, fn) {
+    const bridge = cdpFor(api);
+    const session = await bridge.open(webviewDescriptor(options && options.target));
+    try {
+      return await fn(session, bridge);
+    } finally {
+      session.close();
+    }
+  }
+
+  function webviewApi(api) {
+    return {
+      webviewTargets: () => cdpFor(api).targets(),
+      webviewQuery: (selector, options) => cdpFor(api).query(selector, {
+        target: webviewDescriptor(options && options.target),
+      }),
+      webviewEval: (script, options) => withCdpSession(api, options, (session) => session.evaluate(script)),
+      webviewClick: (selector, options) => withCdpSession(api, options, (session) => session.click(selector)),
+      webviewWaitFor: (selector, options) => withCdpSession(api, options, (session) => session.waitFor(selector, {
+        timeoutMs: options && options.timeoutMs,
+      })),
+      webviewInsertText: (text, options) => withCdpSession(api, options, (session) => session.insertText(text, {
+        selector: options && options.selector,
+      })),
+    };
+  }
+
   function defaultToolApi() {
     return {
       kind: 'default',
@@ -3185,10 +3285,16 @@ export function apply(ctx, config = {}) {
         if (!session || session.state !== 'running') throw new Error('H.264 control stream is not running');
         return session.setClipboard(text, { paste: paste === true });
       },
+      typeText: async (text) => {
+        const session = scrcpyState && scrcpyState.session;
+        if (!session || session.state !== 'running') throw new Error('H.264 control stream is not running');
+        const count = await session.sendText(String(text));
+        return { ok: true, chars: String(text).length, messages: count };
+      },
       install: (apkPath) => installApkFromPath(apkPath),
       pushFile: (local, remote) => vm.pushFile(local, remote),
       pullFile: (remote, local) => vm.pullFile(remote, local),
-      reboot: (mode) => vm.reboot(mode),
+      reboot: (mode, options) => vm.reboot(mode, options),
       forceStop: (pkg) => vm.forceStop(pkg),
       clearData: (pkg) => vm.clearData(pkg),
       uninstall: (pkg) => vm.uninstall(pkg),
@@ -3199,6 +3305,7 @@ export function apply(ctx, config = {}) {
       setProxy: (options) => vm.setProxy(options),
       installCaCertificate: (certPath) => vm.installCaCertificate(certPath),
       networkInfo: () => vm.networkInfo(),
+      networkValidation: () => vm.networkValidation(),
       setNetworkMode: (mode) => vm.setNetworkMode(mode),
       setTcpdumpPath: (filePath) => vm.setTcpdumpPath(filePath),
       setDnsServers: (servers) => vm.setDnsServers(servers),
@@ -3206,14 +3313,41 @@ export function apply(ctx, config = {}) {
       testNetwork: (options) => vm.testNetwork(options),
       addPortForward: (local, remote, options) => vm.addPortForward(local, remote, options),
       removePortForward: (local) => vm.removePortForward(local),
+      addReverse: (local, host) => vm.addReverse(local, host),
+      removeReverse: (local) => vm.removeReverse(local),
+      listReverse: () => vm.listReverseForwards(),
+      captureEnv: () => vm.captureEnv(),
+      restoreEnv: (snapshot) => vm.restoreEnv(snapshot),
+      adb: (args, options) => vm.adb(args, options),
       screenRecord: (options) => vm.screenRecord(options),
       perfSnapshot: () => vm.perfSnapshot(),
       screenshotBuffer: () => vm.screenshot(),
+      ...webviewApi({
+        kind: 'default',
+        id: 'default',
+        adb: (args, options) => vm.adb(args, options),
+        serial: () => vm.serial,
+      }),
       screenshot: async () => {
         const buffer = await vm.screenshot();
         const target = path.join(os.tmpdir(), `apk-vm-shot-${Date.now()}.png`);
         await fsp.writeFile(target, buffer);
         return { path: target, bytes: buffer.length };
+      },
+      screenshotAnnotated: async () => {
+        const [buffer, dump] = await Promise.all([vm.screenshot(), vm.uiDump()]);
+        const nodes = parseUiHierarchy(dump.xml).nodes;
+        const annotated = annotateScreenshot(buffer, nodes);
+        const target = path.join(os.tmpdir(), `apk-vm-shot-overlay-${Date.now()}.png`);
+        await fsp.writeFile(target, annotated.buffer);
+        return {
+          path: target,
+          bytes: annotated.buffer.length,
+          width: annotated.width,
+          height: annotated.height,
+          nodes: nodes.length,
+          boxes: annotated.boxes,
+        };
       },
     };
   }
@@ -3238,10 +3372,11 @@ export function apply(ctx, config = {}) {
       },
       getClipboard: () => instance.getClipboard(),
       setClipboard: (text, paste) => instance.setClipboard(text, paste),
+      typeText: (text) => instance.sendText(text),
       install: async (apkPath) => instance.installApk(resolveApkPath(apkPath, rootsFor())),
       pushFile: (local, remote) => instance.pushFile(local, remote),
       pullFile: (remote, local) => instance.pullFile(remote, local),
-      reboot: (mode) => instance.reboot(mode),
+      reboot: (mode, options) => instance.reboot(mode, options),
       forceStop: (pkg) => instance.forceStop(pkg),
       clearData: (pkg) => instance.clearData(pkg),
       uninstall: (pkg) => instance.uninstall(pkg),
@@ -3252,6 +3387,7 @@ export function apply(ctx, config = {}) {
       setProxy: (options) => instance.vm.setProxy(options),
       installCaCertificate: (certPath) => instance.vm.installCaCertificate(certPath),
       networkInfo: () => instance.vm.networkInfo(),
+      networkValidation: () => instance.vm.networkValidation(),
       setNetworkMode: (mode) => instance.vm.setNetworkMode(mode),
       setTcpdumpPath: (filePath) => instance.vm.setTcpdumpPath(filePath),
       setDnsServers: (servers) => instance.vm.setDnsServers(servers),
@@ -3259,14 +3395,41 @@ export function apply(ctx, config = {}) {
       testNetwork: (options) => instance.vm.testNetwork(options),
       addPortForward: (local, remote, options) => instance.vm.addPortForward(local, remote, options),
       removePortForward: (local) => instance.vm.removePortForward(local),
+      addReverse: (local, host) => instance.vm.addReverse(local, host),
+      removeReverse: (local) => instance.vm.removeReverse(local),
+      listReverse: () => instance.vm.listReverseForwards(),
+      captureEnv: () => instance.vm.captureEnv(),
+      restoreEnv: (snapshot) => instance.vm.restoreEnv(snapshot),
+      adb: (args, options) => instance.vm.adb(args, options),
       screenRecord: (options) => instance.screenRecord(options),
       perfSnapshot: () => instance.perfSnapshot(),
       screenshotBuffer: () => instance.screenshot(),
+      ...webviewApi({
+        kind: 'extra',
+        id: instance.id,
+        adb: (args, options) => instance.vm.adb(args, options),
+        serial: () => instance.vm.serial,
+      }),
       screenshot: async () => {
         const buffer = await instance.screenshot();
         const target = path.join(os.tmpdir(), `apk-vm-shot-${instance.id}-${Date.now()}.png`);
         await fsp.writeFile(target, buffer);
         return { path: target, bytes: buffer.length };
+      },
+      screenshotAnnotated: async () => {
+        const [buffer, dump] = await Promise.all([instance.screenshot(), instance.uiDump()]);
+        const nodes = parseUiHierarchy(dump.xml).nodes;
+        const annotated = annotateScreenshot(buffer, nodes);
+        const target = path.join(os.tmpdir(), `apk-vm-shot-overlay-${instance.id}-${Date.now()}.png`);
+        await fsp.writeFile(target, annotated.buffer);
+        return {
+          path: target,
+          bytes: annotated.buffer.length,
+          width: annotated.width,
+          height: annotated.height,
+          nodes: nodes.length,
+          boxes: annotated.boxes,
+        };
       },
     };
   }
@@ -3563,7 +3726,10 @@ export function apply(ctx, config = {}) {
       'Actions: info, shell, logcat, getprop, setprop, packages, install, push, pull, reboot, root, ' +
       'force_stop, clear_data, uninstall, rotate, ui_dump, inspect_ui, proxy, install_ca, network, record, perf, screenshot, tap, swipe, long_press, key, text, ' +
       'apk_info, find_ui, assert_text, tap_text, clipboard_get, clipboard_set, devices, attach_device, detach_device, start, stop, list_instances, create_instance, destroy_instance, owner_status, claim_vm, release_vm, flow_start, flow_stop, flow_list, flow_replay, storage, clean_storage, ' +
-      'skill_list, skill_get, skill_save, skill_delete, skill_start, skill_stop, skill_cancel, skill_run, skill_codebook, control_ui, control_features, control_codebook, control_tap, control_input, control_long_press, control_swipe, control_assert, control_wait, control_launch. ' +
+      'skill_list, skill_get, skill_save, skill_delete, skill_start, skill_stop, skill_cancel, skill_run, skill_codebook, control_ui, control_features, control_codebook, control_tap, control_input, control_long_press, control_swipe, control_assert, control_wait, control_launch, ' +
+      'webview, tap_css, tap_selector, type_text, wait_for, env_snapshot, env_restore, adb. ' +
+      'WebView actions use Chrome DevTools Protocol (CDP): webview list|eval|click|wait_for|insert_text over the app WebView. ' +
+      'tap_selector clicks a DOM selector through CDP so CSS/dpr/status-bar math is not needed; type_text injects UTF-8 (including Chinese) through the scrcpy control stream. ' +
       'App-operation Skills use a persisted Control Codebook (stable codes such as LOGIN_BTN or A01) instead of raw coordinates; record once with skill_start + control_* then replay with skill_run to reach a page quickly. ' +
       'VM ownership: pass ownerScope=conversation or project to use a dedicated VM for this session/project; shared is the default. owner_status / claim_vm / release_vm inspect or change the current lease. A VM owned by another conversation is never taken silently: the tool returns a vm-busy error unless ownerForce=true (explicit takeover). ' +
       'Multi-instance: pass `instance` to target an isolated VM; omit it to use the calling Agent\'s ' +
@@ -3578,7 +3744,7 @@ export function apply(ctx, config = {}) {
       properties: {
         action: {
           type: 'string',
-          description: 'info|shell|logcat|getprop|setprop|packages|install|push|pull|reboot|root|force_stop|clear_data|uninstall|rotate|ui_dump|inspect_ui|proxy|install_ca|network|record|perf|screenshot|tap|swipe|long_press|key|text|apk_info|find_ui|assert_text|tap_text|clipboard_get|clipboard_set|devices|attach_device|detach_device|start|stop|list_instances|create_instance|destroy_instance|owner_status|claim_vm|release_vm|flow_start|flow_stop|flow_list|flow_replay|storage|clean_storage|skill_list|skill_get|skill_save|skill_delete|skill_start|skill_stop|skill_cancel|skill_run|skill_codebook|control_ui|control_features|control_codebook|control_tap|control_input|control_long_press|control_swipe|control_assert|control_wait|control_launch',
+          description: 'info|shell|logcat|getprop|setprop|packages|install|push|pull|reboot|root|force_stop|clear_data|uninstall|rotate|ui_dump|inspect_ui|proxy|install_ca|network|record|perf|screenshot|tap|swipe|long_press|key|text|apk_info|find_ui|assert_text|tap_text|clipboard_get|clipboard_set|devices|attach_device|detach_device|start|stop|list_instances|create_instance|destroy_instance|owner_status|claim_vm|release_vm|flow_start|flow_stop|flow_list|flow_replay|storage|clean_storage|skill_list|skill_get|skill_save|skill_delete|skill_start|skill_stop|skill_cancel|skill_run|skill_codebook|control_ui|control_features|control_codebook|control_tap|control_input|control_long_press|control_swipe|control_assert|control_wait|control_launch|webview|tap_css|tap_selector|type_text|wait_for|env_snapshot|env_restore|adb',
         },
         instance: { type: 'string', description: 'Target VM instance id (default or an extra instance from list_instances). Omit for the calling Agent\'s assigned instance.' },
         ownerScope: { type: 'string', enum: ['shared', 'conversation', 'project'], description: 'VM ownership scope: shared (default), conversation (dedicated per DSH session), or project (dedicated per workspace).' },
@@ -3605,6 +3771,17 @@ export function apply(ctx, config = {}) {
         y1: { type: 'integer', description: 'swipe: start device y coordinate.' },
         x2: { type: 'integer', description: 'swipe: end device x coordinate.' },
         y2: { type: 'integer', description: 'swipe: end device y coordinate.' },
+        selector: { type: 'string', description: 'webview/tap_selector/type_text: CSS selector, or testid:VALUE for [data-testid="VALUE"]; open shadow roots are supported.' },
+        script: { type: 'string', description: 'webview eval: JavaScript expression evaluated in the page (return a JSON-serializable value).' },
+        targetId: { type: 'string', description: 'webview: optional DevTools target id from action=webview webviewAction=list.' },
+        webviewAction: { type: 'string', description: 'webview: list|eval|click|wait_for|insert_text|info.' },
+        webviewTarget: { type: 'string', description: 'webview: target id, URL substring, title substring, or 1-based index.' },
+        dpr: { type: 'number', description: 'tap_css: optional devicePixelRatio override; defaults to info.coordinateMap.dpr.' },
+        offsetX: { type: 'number', description: 'tap_css: optional device-pixel x offset of the page viewport; defaults to info.coordinateMap.offsetX.' },
+        offsetY: { type: 'number', description: 'tap_css: optional device-pixel y offset of the page viewport; defaults to info.coordinateMap.offsetY.' },
+        statusBar: { type: 'number', description: 'tap_css: optional status-bar height in device pixels; alias for offsetY.' },
+        cssX: { type: 'number', description: 'tap_css: CSS x coordinate (viewport CSS pixels).' },
+        cssY: { type: 'number', description: 'tap_css: CSS y coordinate (viewport CSS pixels).' },
         durationMs: { type: 'integer', description: 'swipe/long_press duration in ms (1-60000; long_press default 800).' },
         key: { type: 'string', description: 'key: Android keycode name or number, e.g. HOME, BACK, ENTER, 3.' },
         text: { type: 'string', description: 'text: text to type into the focused field (max 4096 chars).' },
@@ -3620,10 +3797,17 @@ export function apply(ctx, config = {}) {
         storageAction: { type: 'string', description: 'clean_storage: temp|snapshots|orphan-avds.' },
         avdName: { type: 'string', description: 'clean_storage snapshots: target AVD (defaults to the active AVD).' },
         confirm: { type: 'boolean', description: 'clean_storage: required true for snapshot or orphan AVD deletion.' },
-        networkAction: { type: 'string', description: 'network: info|mode|dns|hosts|test|pcap|forward-add|forward-remove.' },
+        networkAction: { type: 'string', description: 'network: info|mode|dns|hosts|test|validate|pcap|forward-add|forward-remove|reverse-add|reverse-remove|reverse-list.' },
         networkMode: { type: 'string', description: 'network mode: isolated|shared.' },
         localPort: { type: 'integer', description: 'port forward: host loopback port.' },
         remotePort: { type: 'integer', description: 'port forward: guest service port.' },
+        envSnapshot: { type: 'object', additionalProperties: true, description: 'env_restore: snapshot returned by action=env_snapshot.' },
+        adbArgs: { type: 'array', items: { type: 'string' }, description: 'adb: raw adb argument list, e.g. ["devices"] or ["-s","emulator-5554","shell","pidof","app"].' },
+        adbCommand: { type: 'string', description: 'adb: convenience raw command string split on whitespace; prefer adbArgs for paths with spaces.' },
+        restoreEnv: { type: 'boolean', description: 'reboot: capture and restore network/proxy/forwards after boot (default true).' },
+        overlay: { type: 'boolean', description: 'screenshot: draw UIAutomator node boxes on the PNG and return boxes/labels.' },
+        http: { type: 'string', description: 'wait_for: URL polled until any 2xx response.' },
+        pollMs: { type: 'integer', description: 'wait_for: polling interval in ms (default 250).' },
         shared: { type: 'boolean', description: 'port forward: expose to other VMs through the emulator host alias (requires shared mode).' },
         servers: { type: 'array', items: { type: 'string' }, description: 'network DNS: up to 4 IPv4/IPv6 DNS servers.' },
         entries: { type: 'array', items: { type: 'string' }, description: 'network hosts: lines such as "1.2.3.4 api.example.com".' },
@@ -3673,6 +3857,10 @@ export function apply(ctx, config = {}) {
     },
     timeoutMs: 180000,
     async execute(args, exec) {
+      return losslessJson(await this.executeInner(args, exec));
+    },
+
+    async executeInner(args, exec) {
       const action = String((args && args.action) || '').toLowerCase();
 
       if (action === 'list_instances') {
@@ -3724,6 +3912,40 @@ export function apply(ctx, config = {}) {
         const result = await instanceManager.destroy(id);
         disposeInstanceRoutes?.(id);
         return { ok: true, summary: `destroyed instance ${id}`, result };
+      }
+
+      if (action === 'env_snapshot') {
+        const snapshot = await api.captureEnv();
+        return {
+          ok: true,
+          summary: `env: mode=${snapshot.networkMode} forwards=${snapshot.forwards.length} reverses=${snapshot.reverses.length} dns=${snapshot.dnsServers.length} hosts=${snapshot.hostsEntries.length}`,
+          result: snapshot,
+        };
+      }
+      if (action === 'env_restore') {
+        if (!args.envSnapshot || typeof args.envSnapshot !== 'object') throw new Error('env_restore requires envSnapshot');
+        const result = await api.restoreEnv(args.envSnapshot);
+        return { ok: result.ok === true, summary: `restored ${result.applied.length} env item(s)${result.errors.length ? `; ${result.errors.length} failed` : ''}`, result };
+      }
+      if (action === 'adb') {
+        const adbArgs = Array.isArray(args.adbArgs)
+          ? args.adbArgs.map(String)
+          : String(args.adbCommand || '').trim().split(/\s+/).filter(Boolean);
+        if (!adbArgs.length) throw new Error('adb requires adbArgs or adbCommand');
+        const raw = await api.adb(adbArgs, { timeoutMs: Math.min(120000, Number(args.timeoutMs) || 30000), maxBytes: 2 * 1024 * 1024 });
+        const asText = (value) => {
+          if (value == null) return '';
+          if (Buffer.isBuffer(value)) return value.toString('utf8');
+          if (value instanceof Uint8Array) return Buffer.from(value).toString('utf8');
+          return String(value);
+        };
+        const stdout = asText(raw.stdout).slice(0, 200000);
+        const stderr = asText(raw.stderr).slice(0, 20000);
+        return {
+          ok: raw.code === 0 && !raw.timedOut,
+          summary: `adb ${adbArgs[0] || ''} exit ${raw.code}${raw.timedOut ? ' (timeout)' : ''}`,
+          result: { code: raw.code, timedOut: raw.timedOut === true, stdout, stderr },
+        };
       }
 
       if (action === 'apk_info') {
@@ -4019,6 +4241,24 @@ export function apply(ctx, config = {}) {
           const result = await api.removePortForward(args.localPort);
           return { ok: true, summary: `removed forward tcp:${result.localPort}`, result };
         }
+        if (networkAction === 'reverse-add') {
+          if (!args.localPort || !args.remotePort) throw new Error('reverse-add requires localPort (guest) and remotePort (host)');
+          const result = await api.addReverse(args.localPort, args.remotePort);
+          return { ok: true, summary: `reverse guest 127.0.0.1:${result.localPort} -> host 127.0.0.1:${result.hostPort}`, result };
+        }
+        if (networkAction === 'reverse-remove') {
+          if (!args.localPort) throw new Error('reverse-remove requires localPort');
+          const result = await api.removeReverse(args.localPort);
+          return { ok: true, summary: `removed reverse tcp:${result.localPort}`, result };
+        }
+        if (networkAction === 'reverse-list') {
+          const result = await api.listReverse();
+          return { ok: true, summary: `${result.length} reverse forward(s)`, result: { reverses: result, count: result.length } };
+        }
+        if (networkAction === 'validate') {
+          const result = await api.networkValidation();
+          return { ok: result.validated === true, summary: result.validated ? 'network is VALIDATED' : 'network is not VALIDATED', result };
+        }
         throw new Error(`unsupported networkAction: ${networkAction}`);
       }
       if (action === 'start') {
@@ -4086,8 +4326,128 @@ export function apply(ctx, config = {}) {
         }
         case 'text': {
           if (typeof args.text !== 'string' || !args.text) throw new Error('action=text requires a non-empty text string');
+          if (/[^\x00-\x7f]/.test(args.text) && typeof api.typeText === 'function') {
+            const result = await api.typeText(args.text);
+            return { ok: true, summary: `typed ${args.text.length} Unicode chars on ${api.id}`, result };
+          }
           const result = await api.input({ type: 'text', text: args.text });
           return { ok: result.ok, summary: `typed ${args.text.length} chars on ${api.id}`, result };
+        }
+        case 'webview': {
+          const action = String(args.webviewAction || 'list').toLowerCase();
+          const target = args.webviewTarget || args.targetId;
+          if (action === 'list' || action === 'info') {
+            if (typeof api.webviewTargets !== 'function') throw new Error('webview: CDP bridge is unavailable');
+            const targets = await api.webviewTargets();
+            return { ok: true, summary: `${targets.length} WebView target(s) on ${api.id}`, result: { targets, count: targets.length } };
+          }
+          if (action === 'eval') {
+            if (!args.script) throw new Error('webview eval requires script');
+            const value = await api.webviewEval(args.script, { target });
+            return { ok: true, summary: `evaluated JS in WebView on ${api.id}`, result: { value } };
+          }
+          if (action === 'click') {
+            if (!args.selector) throw new Error('webview click requires selector');
+            await api.webviewClick(args.selector, { target });
+            return { ok: true, summary: `clicked WebView selector ${args.selector}`, result: { selector: args.selector } };
+          }
+          if (action === 'wait_for' || action === 'waitfor') {
+            if (!args.selector) throw new Error('webview wait_for requires selector');
+            const timeoutMs = Math.max(1, Math.min(120000, Number(args.timeoutMs) || 10000));
+            await api.webviewWaitFor(args.selector, { target, timeoutMs });
+            return { ok: true, summary: `WebView selector ${args.selector} appeared within ${timeoutMs}ms`, result: { selector: args.selector } };
+          }
+          if (action === 'insert_text' || action === 'inserttext' || action === 'type') {
+            if (typeof args.text !== 'string' || !args.text) throw new Error('webview insert_text requires text');
+            await api.webviewInsertText(args.text, { target, selector: args.selector });
+            return { ok: true, summary: `inserted ${args.text.length} chars into WebView on ${api.id}`, result: { chars: args.text.length } };
+          }
+          throw new Error(`webview: unknown webviewAction ${action}; use list|eval|click|wait_for|insert_text`);
+        }
+        case 'type_text': {
+          if (typeof args.text !== 'string' || !args.text) throw new Error('action=type_text requires a non-empty text string');
+          if (args.selector) {
+            if (typeof api.webviewInsertText !== 'function') throw new Error('type_text with selector requires a CDP/WebView bridge');
+            await api.webviewInsertText(args.text, { target: args.webviewTarget || args.targetId, selector: args.selector });
+            return { ok: true, summary: `inserted ${args.text.length} Unicode chars into ${args.selector} on ${api.id}` };
+          }
+          if (typeof api.typeText === 'function') {
+            const result = await api.typeText(args.text);
+            return {
+              ok: true,
+              summary: `typed ${args.text.length} Unicode chars on ${api.id}`,
+              result,
+            };
+          }
+          throw new Error('type_text: H.264 control stream is unavailable; open the VM panel once to start streaming, or pass a WebView selector');
+        }
+        case 'tap_css': {
+          const x = Number(args.cssX !== undefined ? args.cssX : args.x);
+          const y = Number(args.cssY !== undefined ? args.cssY : args.y);
+          if (!Number.isFinite(x) || !Number.isFinite(y)) throw new Error('action=tap_css requires numeric cssX/cssY (viewport CSS pixels)');
+          const info = await api.deviceInfo();
+          const map = info.coordinateMap || {};
+          const dpr = Number(args.dpr !== undefined ? args.dpr : map.dpr);
+          const offsetX = Number(args.offsetX !== undefined ? args.offsetX : map.offsetX || 0);
+          const offsetY = Number(
+            args.offsetY !== undefined
+              ? args.offsetY
+              : args.statusBar !== undefined
+                ? args.statusBar
+                : map.offsetY || 0,
+          );
+          if (!Number.isFinite(dpr) || dpr <= 0) throw new Error('tap_css: devicePixelRatio is unknown; pass dpr explicitly');
+          const dx = Math.round(x * dpr + offsetX);
+          const dy = Math.round(y * dpr + offsetY);
+          const result = await api.input({ type: 'tap', x: dx, y: dy });
+          return {
+            ok: result.ok,
+            summary: `tap CSS ${x},${y} -> device ${dx},${dy} (dpr=${dpr}, offset=${offsetX},${offsetY}) on ${api.id}`,
+            result: { css: { x, y }, device: { x: dx, y: dy }, dpr, offset: { x: offsetX, y: offsetY }, input: result },
+          };
+        }
+        case 'tap_selector': {
+          if (!args.selector) throw new Error('action=tap_selector requires selector');
+          if (typeof api.webviewClick !== 'function') throw new Error('tap_selector: no CDP/WebView bridge is available');
+          const result = await api.webviewClick(args.selector, { target: args.webviewTarget || args.targetId });
+          return { ok: true, summary: `clicked selector ${args.selector}`, result };
+        }
+        case 'wait_for': {
+          const timeoutMs = Math.max(0, Math.min(120000, Number(args.timeoutMs) || 10000));
+          const pollMs = Math.max(25, Math.min(2000, Number(args.pollMs) || 250));
+          const started = Date.now();
+          const deadline = started + timeoutMs;
+          const mode = args.selector ? 'selector' : args.http ? 'http' : args.text ? 'text' : 'seconds';
+          let last = null;
+          while (Date.now() <= deadline) {
+            if (mode === 'seconds') {
+              const waitMs = Math.min(timeoutMs, Math.max(0, Number(args.seconds || 0) * 1000));
+              await new Promise((resolve) => setTimeout(resolve, waitMs));
+              return { ok: true, summary: `waited ${waitMs}ms on ${api.id}`, result: { waitedMs: waitMs } };
+            }
+            try {
+              if (mode === 'selector') {
+                if (typeof api.webviewQuery === 'function') {
+                  last = await api.webviewQuery(args.selector, { target: args.webviewTarget || args.targetId });
+                  if (last && last.found) return { ok: true, summary: `selector appeared after ${Date.now() - started}ms`, result: last };
+                }
+              } else if (mode === 'http') {
+                const response = await fetch(String(args.http), { redirect: 'manual' });
+                last = { status: response.status, ok: response.ok, url: response.url };
+                if (response.ok) return { ok: true, summary: `HTTP ${response.status} after ${Date.now() - started}ms`, result: last };
+              } else if (mode === 'text') {
+                const dump = await api.uiDump();
+                const needle = String(args.text);
+                last = { nodes: dump.nodes, matched: String(dump.xml || '').includes(needle) };
+                if (last.matched) return { ok: true, summary: `UI text appeared after ${Date.now() - started}ms`, result: last };
+              }
+            } catch (error) {
+              last = { error: error.message };
+            }
+            if (Date.now() + pollMs > deadline) break;
+            await new Promise((resolve) => setTimeout(resolve, pollMs));
+          }
+          throw new Error(`wait_for timed out after ${timeoutMs}ms (${mode}): ${JSON.stringify(last)}`);
         }
         case 'install': {
           const installed = await api.install(args.path);
@@ -4104,8 +4464,12 @@ export function apply(ctx, config = {}) {
           return { ok: true, summary: `pulled ${args.remotePath} -> ${result.localPath}`, result };
         }
         case 'reboot': {
-          const result = await api.reboot(args.mode || '');
-          return { ok: true, summary: `rebooting ${api.id} (${result.mode})`, result };
+          const result = await api.reboot(args.mode || '', { restoreEnv: args.restoreEnv !== false });
+          return {
+            ok: true,
+            summary: `rebooting ${api.id} (${result.mode})${result.restoreScheduled ? '; env restore scheduled' : ''}`,
+            result,
+          };
         }
         case 'root': {
           const ok = await api.ensureRoot();
@@ -4125,6 +4489,10 @@ export function apply(ctx, config = {}) {
           return { ok: result.ok, summary: `uninstalled ${args.packageName}`, result };
         }
         case 'screenshot': {
+          if (args.overlay === true) {
+            const result = await api.screenshotAnnotated();
+            return { ok: true, summary: `annotated screenshot (${result.nodes} nodes) saved to ${result.path}`, result };
+          }
           const result = await api.screenshot();
           return { ok: true, summary: `${api.id}: screenshot saved to ${result.path} (${result.bytes} bytes)`, result };
         }

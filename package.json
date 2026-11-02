@@ -1,6 +1,6 @@
 {
   "name": "dsh-apk-vm",
-  "version": "0.10.2",
+  "version": "0.11.0",
   "type": "module",
   "description": "Local AOSP Android VM for DeepSeek Harness: preview rooted APKs at up to 60 fps, automate UIAutomator flows, and give each Agent an isolated VM.",
   "license": "Apache-2.0",
@@ -25,9 +25,9 @@
     "registry": "https://registry.npmjs.org/"
   },
   "scripts": {
-    "check": "node --check index.js && node --check client.js && node --check lib/android.js && node --check lib/apk-bundle.js && node --check lib/flows.js && node --check lib/storage.js && node --check lib/ui-inspector.js && node --check lib/x509.js && node --check lib/scrcpy.js && node --check lib/ws.js && node --check lib/setup.js && node --check lib/instances.js && node --check lib/vm-ownership.js && node --check lib/http-owner.js && node --check lib/video-stream.js && node --check lib/aab.js && node --check lib/har.js && node --check lib/ui-tests.js && node --check lib/remote.js && node --check lib/image-features.js && node --check lib/control-codebook.js && node --check lib/app-skills.js",
+    "check": "node --check index.js && node --check client.js && node --check lib/android.js && node --check lib/apk-bundle.js && node --check lib/flows.js && node --check lib/storage.js && node --check lib/ui-inspector.js && node --check lib/x509.js && node --check lib/scrcpy.js && node --check lib/ws.js && node --check lib/setup.js && node --check lib/instances.js && node --check lib/vm-ownership.js && node --check lib/http-owner.js && node --check lib/video-stream.js && node --check lib/aab.js && node --check lib/har.js && node --check lib/ui-tests.js && node --check lib/remote.js && node --check lib/cdp.js && node --check lib/json-safe.js && node --check lib/png-annotate.js && node --check lib/image-features.js && node --check lib/control-codebook.js && node --check lib/app-skills.js",
     "privacy": "node scripts/privacy-scan.mjs",
-    "test": "node spike/ui-smoke.cjs && node spike/ui-better-sidebar-smoke.cjs && node spike/setup-smoke.mjs && node spike/android/mock-device.mjs && node spike/android/launch-plan.mjs && node spike/instances-smoke.mjs && node spike/ownership-test.mjs && node spike/features.mjs && node spike/aab-test.mjs && node spike/har-test.mjs && node spike/ui-tests-test.mjs && node spike/remote-test.mjs && node spike/skill-test.mjs"
+    "test": "node spike/ui-smoke.cjs && node spike/ui-better-sidebar-smoke.cjs && node spike/setup-smoke.mjs && node spike/android/mock-device.mjs && node spike/android/launch-plan.mjs && node spike/instances-smoke.mjs && node spike/ownership-test.mjs && node spike/cdp-test.mjs && node spike/features.mjs && node spike/aab-test.mjs && node spike/har-test.mjs && node spike/ui-tests-test.mjs && node spike/remote-test.mjs && node spike/skill-test.mjs"
   },
   "exports": {
     ".": "./index.js",
@@ -57,6 +57,9 @@
     "lib/har.js",
     "lib/ui-tests.js",
     "lib/remote.js",
+    "lib/cdp.js",
+    "lib/json-safe.js",
+    "lib/png-annotate.js",
     "lib/image-features.js",
     "lib/control-codebook.js",
     "lib/app-skills.js",

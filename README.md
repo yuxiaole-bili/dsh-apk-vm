@@ -45,7 +45,7 @@ same-origin, loopback-only debug HTTP API and an `apk_vm` Agent tool.
 > 当前 **Windows x64 与 Linux x86_64（headless）为端到端已验证平台**；macOS 仅做探测/CI
 > 覆盖，详见 `docs/LINUX-E2E.md`。
 
-**Status:** `0.10.2` · Apache-2.0 · no npm runtime dependencies · no build step.
+**Status:** `0.11.0` · Apache-2.0 · no npm runtime dependencies · no build step.
 
 This is an open-source DSH plugin published on npm as **`dsh-apk-vm`**. Repository:
 [github.com/yuxiaole-bili/dsh-apk-vm](https://github.com/yuxiaole-bili/dsh-apk-vm).
@@ -272,6 +272,36 @@ key {"text":"HOME"}       -> returned to launcher
 - `POST /apk-vm/debug/ca` accepts a host `.pem`/`.crt` path and installs it under the guest's
   user CA directory with the correct subject hash.
 
+## WebView and Chrome DevTools Protocol
+
+H5 pages and hybrid Apps often expose nothing useful to UIAutomator. The plugin now speaks CDP
+to the running WebView: it discovers `webview_devtools_remote` sockets, forwards each over
+`adb forward` on loopback, and keeps the connection internal to the Host process.
+
+- `apk_vm` actions: `webview` (`webviewAction=list|eval|click|wait_for|insert_text|info`),
+  `tap_selector`, `tap_css`, `type_text`, `wait_for`.
+- `webviewAction=list` returns sanitized target metadata (`id`, `title`, `url`, `type`), never a
+  DevTools WebSocket URL or token. Select a target with `targetId` or `webviewTarget`.
+- `webviewAction=eval` evaluates a JSON-returning expression; `click` and `wait_for` accept
+  ordinary CSS and `testid:VALUE` (which maps to `[data-testid="VALUE"]`). **Open** shadow roots
+  are traversed; closed shadow roots and iframes are not.
+- `tap_selector` uses the same deep query and clicks through CDP. `tap_css` is for canvas or
+  non-DOM UI: it converts CSS viewport coordinates with `info.coordinateMap`.
+- `type_text` injects Unicode through the scrcpy control stream; it does not require ADBKeyboard.
+- `wait_for` accepts a selector, an HTTP URL, a UI text condition, or a number of seconds. It
+  polls and returns the elapsed time instead of forcing fixed sleeps.
+- CDP is diagnostic/automation only and is never exposed to the network: the bridge binds to
+  loopback and closes its forwards when the Agent call/plugin disposes.
+
+Example Agent sequence for a hybrid App:
+
+```text
+apk_vm { action: "webview", webviewAction: "list" }
+apk_vm { action: "webview", webviewAction: "click", selector: "testid:login" }
+apk_vm { action: "type_text", text: "中文角色名" }
+apk_vm { action: "wait_for", selector: "[data-testid=home]" }
+```
+
 ## App-operation Skills and Control Codebook
 
 App-operation Skills are short, replayable navigation recipes for tests. Instead of recording
@@ -397,6 +427,9 @@ port forwards and pcap status. `POST /apk-vm/network` accepts `action`:
 { "action": "dns", "servers": ["1.1.1.1"] }
 { "action": "hosts", "entries": ["198.51.100.10 api.example.test"] }
 { "action": "test", "host": "198.51.100.10", "port": 8080 }
+{ "action": "reverse-add", "localPort": 8080, "hostPort": 3000 }
+{ "action": "reverse-remove", "localPort": 8080 }
+{ "action": "validate" }
 { "action": "pcap", "path": "D:\\apk-vm-capture.pcap" }
 ```
 
@@ -410,6 +443,11 @@ port forwards and pcap status. `POST /apk-vm/network` accepts `action`:
   QEMU NAT itself remains isolated.
 - pcap capture is passed to the emulator as `-tcpdump` and starts on the next emulator start;
   download via `GET /apk-vm/network/pcap`.
+- `reverse-add` maps guest `127.0.0.1:<localPort>` to host `127.0.0.1:<hostPort>` with
+  `adb reverse`; `reboot` re-adds it during environment restore.
+- `validate` reports Android's `VALIDATED`/`INTERNET` state. An isolated QEMU NAT cannot pass
+  the captive-portal probe, so WebView may reject non-loopback HTTP even when `nc`/`curl`
+  succeed; the action returns an explicit hint instead of pretending the network is validated.
 
 
 A public, dependency-free demo lives in [examples](examples/README.md):
@@ -766,14 +804,19 @@ Host half prepares a rooted debug environment and captures it in the quick-boot 
 | POST | `/apk-vm/debug/record` | `{"seconds":1–60}` (default 5) → `screenrecord` MP4 pulled to the host temp dir; returns `localPath` and byte size; the panel auto-downloads it. |
 | GET | `/apk-vm/artifacts?name=…` | Download a screenshot/recording previously written by the plugin into the OS temp dir (basename whitelist, no arbitrary paths). |
 | GET | `/apk-vm/debug/perf` | load average, `/proc/meminfo` totals/free/available and the first lines of `dumpsys cpuinfo`. |
-| GET/HEAD | `/apk-vm/debug/screenshot` | PNG download (`Content-Disposition: attachment`). |
+| GET/HEAD | `/apk-vm/debug/screenshot` | PNG download (`Content-Disposition: attachment`). Add `?overlay=1` to draw the current UIAutomator interactive-node boxes on the image. |
+| POST | `/apk-vm/debug/env` | `{"action":"capture"\|"restore","envSnapshot":{…}}` — snapshot or re-apply network mode, proxy, DNS intent, hosts and port/reverse forwards. |
 
 ### Agent tool `apk_vm`
 
 Registered globally through `ctx.tools`, so every DSH agent can operate the rooted VM directly:
 `info`, `shell`, `logcat`, `getprop`, `setprop`, `packages`, `install`, `push`, `pull`,
 `reboot`, `root`, `force_stop`, `clear_data`, `uninstall`, `rotate`, `ui_dump`, `record`, `perf`,
-`screenshot`, high-level input `tap` / `swipe` / `long_press` / `key` / `text` (device coordinates),
+`screenshot` (add `overlay:true` for UIAutomator boxes), high-level input `tap` / `swipe` / `long_press` / `key` / `text`
+(device coordinates), **CSS-coordinate input** `tap_css` / `tap_selector`, Unicode `type_text`,
+**WebView CDP** `webview` (`list|eval|click|wait_for|insert_text|info`), conditional `wait_for`,
+network `reverse-add` / `reverse-remove` / `reverse-list` / `validate`, environment
+`env_snapshot` / `env_restore` and raw `adb` argv,
 UI automation `find_ui` / `assert_text` / `tap_text` (UIAutomator text/resource-id/content-desc/class),
 clipboard `clipboard_get` / `clipboard_set`,
 static `apk_info` (metadata without booting a VM),
