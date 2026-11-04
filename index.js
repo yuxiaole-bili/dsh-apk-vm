@@ -664,6 +664,17 @@ export function apply(ctx, config = {}) {
     return st.startPromise;
   }
 
+  // Clipboard/text tools must work even when no panel client is connected.
+  // Start the scrcpy control stream lazily, then let the normal idle timer stop it.
+  async function ensureControlSession() {
+    const st = await ensureScrcpy();
+    const session = st && st.session;
+    if (!session || session.state !== 'running') {
+      throw new Error('H.264 control stream is not running');
+    }
+    return session;
+  }
+
   function handleScrcpyClient(client) {
     const st = getScrcpyState();
     st.clients.add(client);
@@ -2579,10 +2590,12 @@ export function apply(ctx, config = {}) {
     });
 
     register('/apk-vm/clipboard', async (req, res) => {
-      const session = scrcpyState && scrcpyState.session;
       if (req.method === 'GET') {
-        if (!session || session.state !== 'running') {
-          sendError(res, 409, 'H.264 control stream is not running');
+        let session;
+        try {
+          session = await ensureControlSession();
+        } catch (error) {
+          sendError(res, 409, error && error.message ? error.message : String(error));
           return;
         }
         try {
@@ -2590,6 +2603,8 @@ export function apply(ctx, config = {}) {
           sendJson(res, 200, { ok: true, text });
         } catch (error) {
           sendError(res, 504, error && error.message ? error.message : String(error));
+        } finally {
+          scheduleScrcpyIdleStop();
         }
         return;
       }
@@ -2597,17 +2612,28 @@ export function apply(ctx, config = {}) {
         sendError(res, 405, 'GET or POST only');
         return;
       }
-      if (!session || session.state !== 'running') {
-        sendError(res, 409, 'H.264 control stream is not running');
+      let body;
+      try {
+        body = await readJsonBody(req);
+      } catch (error) {
+        sendError(res, 400, error && error.message ? error.message : String(error));
         return;
       }
-      const body = await readJsonBody(req);
       if (typeof body.text !== 'string') {
         sendError(res, 400, 'text must be a string');
         return;
       }
-      const result = await session.setClipboard(body.text, { paste: body.paste === true });
-      sendJson(res, 200, { ok: true, ...result });
+      try {
+        const session = await ensureControlSession();
+        try {
+          const result = await session.setClipboard(body.text, { paste: body.paste === true });
+          sendJson(res, 200, { ok: true, ...result });
+        } finally {
+          scheduleScrcpyIdleStop();
+        }
+      } catch (error) {
+        sendError(res, 409, error && error.message ? error.message : String(error));
+      }
     });
 
     register('/apk-vm/stream', async (req, res) => {
@@ -3276,20 +3302,29 @@ export function apply(ctx, config = {}) {
         return vm.input(payload);
       },
       getClipboard: async () => {
-        const session = scrcpyState && scrcpyState.session;
-        if (!session || session.state !== 'running') throw new Error('H.264 control stream is not running');
-        return session.requestClipboard(2000);
+        const session = await ensureControlSession();
+        try {
+          return await session.requestClipboard(2000);
+        } finally {
+          scheduleScrcpyIdleStop();
+        }
       },
       setClipboard: async (text, paste) => {
-        const session = scrcpyState && scrcpyState.session;
-        if (!session || session.state !== 'running') throw new Error('H.264 control stream is not running');
-        return session.setClipboard(text, { paste: paste === true });
+        const session = await ensureControlSession();
+        try {
+          return await session.setClipboard(text, { paste: paste === true });
+        } finally {
+          scheduleScrcpyIdleStop();
+        }
       },
       typeText: async (text) => {
-        const session = scrcpyState && scrcpyState.session;
-        if (!session || session.state !== 'running') throw new Error('H.264 control stream is not running');
-        const count = await session.sendText(String(text));
-        return { ok: true, chars: String(text).length, messages: count };
+        const session = await ensureControlSession();
+        try {
+          const count = await session.sendText(String(text));
+          return { ok: true, chars: String(text).length, messages: count };
+        } finally {
+          scheduleScrcpyIdleStop();
+        }
       },
       install: (apkPath) => installApkFromPath(apkPath),
       pushFile: (local, remote) => vm.pushFile(local, remote),
@@ -3797,7 +3832,7 @@ export function apply(ctx, config = {}) {
         storageAction: { type: 'string', description: 'clean_storage: temp|snapshots|orphan-avds.' },
         avdName: { type: 'string', description: 'clean_storage snapshots: target AVD (defaults to the active AVD).' },
         confirm: { type: 'boolean', description: 'clean_storage: required true for snapshot or orphan AVD deletion.' },
-        networkAction: { type: 'string', description: 'network: info|mode|dns|hosts|test|validate|pcap|forward-add|forward-remove|reverse-add|reverse-remove|reverse-list.' },
+        networkAction: { type: 'string', description: 'network: info|mode|dns|hosts|test|validate|pcap|proxy|forward-add|forward-remove|reverse-add|reverse-remove|reverse-list.' },
         networkMode: { type: 'string', description: 'network mode: isolated|shared.' },
         localPort: { type: 'integer', description: 'port forward: host loopback port.' },
         remotePort: { type: 'integer', description: 'port forward: guest service port.' },
@@ -4201,6 +4236,16 @@ export function apply(ctx, config = {}) {
       }
       if (action === 'network') {
         const networkAction = String(args.networkAction || 'info').toLowerCase();
+        // `proxy` already exists as a top-level action; accept it here too because
+        // callers naturally try `action=network, networkAction=proxy`.
+        if (networkAction === 'proxy') {
+          if (args.enabled === false || args.clear === true) {
+            const result = await api.setProxy({ enabled: false });
+            return { ok: true, summary: 'proxy cleared', result };
+          }
+          const result = await api.setProxy({ host: args.host, port: args.port, bypass: args.bypass, enabled: true });
+          return { ok: true, summary: result.proxy ? `proxy=${result.proxy}` : 'proxy set', result };
+        }
         if (networkAction === 'mode') {
           const result = api.setNetworkMode(args.networkMode || args.mode);
           return { ok: true, summary: `network mode: ${result.mode}`, result };

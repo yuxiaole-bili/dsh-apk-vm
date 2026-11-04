@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.11.1
+
+Clipboard/text tools no longer need a panel to already have a control stream; network proxy has an alias.
+
+### Fixed
+
+- `clipboard_get` / `clipboard_set` and Unicode `type_text` now start the scrcpy control
+  stream on demand when no panel client is connected, then release it through the normal
+  idle timer. Clipboard reads time out with `504` instead of misreporting a stale stream
+  as a missing one (`409`).
+- `action=network, networkAction=proxy` is accepted as an alias for the top-level `proxy`
+  action, including `enabled:false` / `clear:true` to disable it.
+
 ## 0.11.0
 
 WebView/CDP control, reliable tool JSON, CSS-coordinate input, Unicode typing and reboot-safe network state.

@@ -30,7 +30,7 @@ window.__ModuleLoader__.load({
     var SWIPE_THRESHOLD_PX = 24;
     var FRAME_INTERVAL_MS = 500;
     var STATE_INTERVAL_MS = 2000;
-    var CLIENT_VERSION = '0.11.0';
+    var CLIENT_VERSION = '0.11.1';
 
     /* ------------------------------------------------------------------ *
      * Optional dsh-better-sidebar integration.
