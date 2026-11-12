@@ -53,11 +53,17 @@
         # Optional location of the plugin-managed JDK 17. A system JDK or
         # JAVA_HOME is still preferred when present.
         # jdkRoot: 'C:/tools/dsh-jdk'
+        # Pin the managed Temurin major (default 17). The packaged known-good
+        # table covers 17.0.21+9; other majors need the Adoptium API.
+        # jdkVersion: 17
         # Mirror fallback for the Temurin JDK archive. Adoptium hosts it on
         # GitHub; when that is unreachable the built-in Tsinghua mirror is
         # tried automatically (still verified against Adoptium's SHA-256).
         # Accepts a base URL or a list of bases; '' disables the fallback.
         # jdkMirror: 'https://mirrors.tuna.tsinghua.edu.cn/Adoptium'
+        # Where the Agent activity journal is stored. The default is
+        # <profile>/.apk-vm/activity (JSONL + screenshot PNGs, ring-pruned).
+        # activityDir: 'D:/vm-logs/apk-vm-activity'
         # Manual (user-triggered only) system-image download from the
         # Environment card; autoSetup does not need this flag.
         allowSetupDownloads: false

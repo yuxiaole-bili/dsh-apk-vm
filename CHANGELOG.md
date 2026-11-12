@@ -1,5 +1,91 @@
 # Changelog
 
+## 1.0.0
+
+Observability and reliability release: a local Agent activity journal, hardened device
+interactions, and a first-class zero-config provisioning chain.
+
+### Added
+
+- **Agent activity log.** Every `apk_vm` tool call is journaled locally as JSONL under
+  `<profile>/.apk-vm/activity` (override with `activityDir`), with a screenshot attached to
+  mutating actions. New `GET /apk-vm/activity` (list + stats, filterable by action / instance /
+  result), `GET /apk-vm/activity/<id>`, `GET /apk-vm/activity/<id>/shot` and
+  `POST /apk-vm/activity/clear`. The sidebar gains an **Agent activity** timeline card with
+  filters, lazy thumbnails, a full-image overlay and confirm-to-clear. Journal and screenshots
+  stay on this host; nothing is uploaded. New `lib/activity-log.js` (ring-pruned at 1000
+  entries / 250 MB by default).
+- **Device resilience and recovery** in `lib/android.js`: bounded-budget `screenshot()` with
+  health probes and structured error codes (`EDEVICE_UNRESPONSIVE`, `ESYSTEM_SERVER_DEAD`,
+  `ESURFACEFLINGER_DEAD`, `ESCREENSHOT_TIMEOUT`, …) plus opt-in one-shot reconnect/reboot
+  recovery; `uiDump()` WebView text salvage (`/dev/tty`, `--compressed`, `adb pull`, synthetic
+  text nodes); root execution helpers (`shell(…, { forceRoot: true })` with `su` fallback,
+  `readRootFile` / `writeRootFile` / `readAppDataFile` / `writeAppDataFile` /
+  `writeSharedPrefs`); opt-in tap verification (before/after frame hash + jitter retry);
+  clipboard-paste fallback for non-ASCII `text`; automatic guest default-route repair after an
+  `isolated → shared` switch or an env restore; `probeHealth()` / `recoverDevice()` watchdog/ANR
+  classification; opt-in appops preservation across `installApk()`.
+- **Provisioning hardening** in `lib/jdk.js` / `lib/autosetup.js`: bundled known-good Temurin
+  `17.0.21+9` checksum table (including macOS arm64) used when the Adoptium API is unreachable;
+  resumable downloads with verified-archive reuse and HTTP `Range`; download-candidate probes and
+  per-candidate timeouts (a blocked GitHub host can no longer stall the chain); 3 GB free-disk
+  precheck; cross-process `<jdkRoot>/.lock` guard; `jdkVersion` pin; live download progress
+  (`detail.progress`) in the panel; host-arch default system image (`arm64-v8a` on arm64 hosts).
+- `examples/agent-workflow.mjs` — a six-step, copy-pasteable Agent workflow (state → install →
+  UI tree → tap → assert → screenshot → activity timeline → device identity).
+- `scripts/make-demo-gif.mjs` — dependency-free GIF89a encoder for guest screencap frames, plus
+  `docs/demo.gif` (28 s: home → sample APK installed and driven through the HTTP API → 60 fps
+  animation). `docs/DEMO.md` documents how to reproduce it.
+- WebView control docs and examples now point at `webview`/`tap_css`/`tap_selector`
+  as the preferred path for DOM content.
+
+### Changed
+
+- `sdkmanager` installs (`installSystemImage`, `installSdkPackages`) always pass
+  `--sdk_root=<sdkRoot>`, so a `sdkmanager` found elsewhere on `PATH` cannot install into the
+  wrong SDK. `bootstrapSdk` already did this.
+- The Environment report includes `javaHome` / `javaPresent`, the auto-setup state and the
+  activity routes; the panel adds a Java row, auto-setup progress percent/bytes, and the Agent
+  activity card. Hypervisor hints are host-architecture neutral.
+- README/docs are now 1.0.0: new sections for the activity log and for multiple instances,
+  physical devices and snapshots; expanded troubleshooting for the fixes above; macOS/arm64
+  image selection documented; demo media checked in.
+
+### Fixed
+
+- `adb` tool action failed with `Cannot access 'api' before initialization` on every call — the
+  tool API is now resolved lazily per action.
+- Auto-start after first-use provisioning now uses a dedicated one-shot kick, so a partially
+  configured host that attempted a start before provisioning finished still boots once the
+  environment reports `ok`.
+- `storage` tool action failed with `storageSdkRoot is not defined` — the helper is hoisted into
+  the `apply()` scope shared by the route and the tool.
+- Tool failures now return JSON-safe `{ ok: false, summary, result }` errors instead of throwing
+  non-round-trippable exceptions.
+- `push` reported a misleading "local file not found under an allowed root" for files that exist
+  but sit outside the configured roots, or for paths on case-insensitive filesystems. Paths are
+  realpath-canonicalized, and "outside the allowed roots" (with the resolved roots and a `roots`
+  config hint) is now distinct from "file not found".
+- Screenshots could block for the full 180 s budget when the guest `SurfaceFlinger` /
+  `system_server` had wedged, with no hint or recovery path. They now fail fast with a
+  structured, actionable device error and an opt-in recovery hook.
+- `ui_dump` / `inspect_ui` returned almost no text for WebView-hosted content on some images;
+  the dump is now supplemented from guest-side `uiautomator dump`/`adb pull` text nodes.
+- `shell` ran as the unprivileged `shell` user even when the VM reported `root: true`; root
+  helpers now make `su` usage explicit (app-data writes still need the app's SELinux category,
+  which is documented).
+- Taps on WebView buttons could be silently lost; callers can opt into verification (frame hash
+  diff + ±1 px retry). Non-ASCII `type_text` that reached the IME but not a WebView field falls
+  back to clipboard paste.
+- After switching an isolated VM to shared networking (or restoring a snapshot created in shared
+  mode) the guest could be left without a default route and apps reported `ENETUNREACH`; the
+  default route is now repaired in the background.
+- Reinstalling an APK could reset the "install unknown apps" appops flag; `installApk()` can now
+  snapshot and restore allowed appops (opt-in).
+- `autoSetup` could hang for the full download budget on a blocked GitHub host; candidate probes
+  and per-candidate timeouts plus the known-good JDK table make it fail over instead.
+- macOS arm64 provisioning selected the x86_64 image; it now defaults to `arm64-v8a`.
+
 ## 0.12.0
 
 Zero-config first run: the plugin now provisions its own JDK, Android SDK, system image and AVD.

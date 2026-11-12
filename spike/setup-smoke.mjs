@@ -39,6 +39,21 @@ import {
 const IS_WIN = process.platform === 'win32';
 const EXE = IS_WIN ? '.exe' : '';
 const TOOL_EXT = IS_WIN ? '.bat' : '';
+/** The ABI the default image must pick for this host CPU. */
+const EXPECTED_ABI = process.arch === 'arm64' ? 'arm64-v8a' : 'x86_64';
+/** Parse `<api>/<tag>/<abi>` out of the default image id for fixtures. */
+const DEFAULT_IMAGE_PARTS = DEFAULT_SYSTEM_IMAGE.split(';');
+const DEFAULT_IMAGE_DIR = [
+  'system-images',
+  DEFAULT_IMAGE_PARTS[1],
+  DEFAULT_IMAGE_PARTS[2],
+  DEFAULT_IMAGE_PARTS[3],
+];
+
+/** The ABI embedded in the current default image id. */
+function DEFAULT_ABI_CHECK() {
+  return DEFAULT_SYSTEM_IMAGE.split(';')[3];
+}
 
 const CONTRACT_KEYS = [
   'ok',
@@ -99,9 +114,7 @@ function makeSdk(root, options = {}) {
     writeFake(path.join(sdk, 'cmdline-tools', 'latest', 'bin', `sdkmanager${TOOL_EXT}`));
   }
   if (systemImage) {
-    mkdirSync(path.join(sdk, 'system-images', 'android-34', 'default', 'x86_64'), {
-      recursive: true,
-    });
+    mkdirSync(path.join(sdk, ...DEFAULT_IMAGE_DIR), { recursive: true });
   }
   return sdk;
 }
@@ -231,7 +244,13 @@ async function check(name, fn) {
 async function main() {
   // --- export contract ------------------------------------------------------
   await check('exports the stable setup API and documented defaults', async () => {
-    assert.equal(DEFAULT_SYSTEM_IMAGE, 'system-images;android-34;default;x86_64');
+    assert.equal(
+      DEFAULT_SYSTEM_IMAGE,
+      `system-images;android-34;default;${EXPECTED_ABI}`,
+      'the default image ABI must match the host CPU (Apple Silicon needs arm64-v8a)',
+    );
+    assert.equal(DEFAULT_IMAGE_PARTS[3], EXPECTED_ABI);
+    assert.equal(DEFAULT_ABI_CHECK(), EXPECTED_ABI);
     assert.equal(DEFAULT_AVD_NAME, 'dsh_apk');
     assert.equal(typeof detectEnvironment, 'function');
     assert.equal(typeof createAvd, 'function');
@@ -679,7 +698,7 @@ async function main() {
       call.file,
       path.join(sdk, 'cmdline-tools', 'latest', 'bin', `sdkmanager${TOOL_EXT}`),
     );
-    assert.deepEqual(call.args, ['--install', DEFAULT_SYSTEM_IMAGE]);
+    assert.deepEqual(call.args, [`--sdk_root=${sdk}`, '--install', DEFAULT_SYSTEM_IMAGE]);
     assert.equal(call.opts.stdin, undefined);
     assert.equal(call.opts.timeoutMs, 20 * 60 * 1000);
   });

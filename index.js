@@ -14,7 +14,7 @@
  * and the open-source framework choices are documented in README.md / DESIGN.md.
  */
 import { randomUUID } from 'node:crypto';
-import { createReadStream, existsSync, readFileSync } from 'node:fs';
+import { createReadStream, existsSync, readFileSync, realpathSync } from 'node:fs';
 import { promises as fsp } from 'node:fs';
 import net from 'node:net';
 import os from 'node:os';
@@ -43,6 +43,7 @@ import { runAssertions, compareScreenshot, createTestReport, reportMarkdown } fr
 import { SshAdbTunnel } from './lib/remote.js';
 import { CdpBridge } from './lib/cdp.js';
 import { losslessJson } from './lib/json-safe.js';
+import { ActivityLog } from './lib/activity-log.js';
 
 const PLUGIN_VERSION = (() => {
   try {
@@ -333,6 +334,9 @@ export function apply(ctx, config = {}) {
   let remoteTunnel = null;
   let startKick = null;
   let autoStartKicked = false;
+  // Provisioning completion gets its own one-shot kick: a partially configured host can
+  // consume utoStartKicked from an earlier (failed) manual/auto start attempt.
+  let provisionAutoStarted = false;
   const frame = { buffer: null, at: 0, inFlight: null, receivedAt: [] };
   const screen = { value: null, at: 0 };
   const preferAutoStart = cfg.autoStart !== false;
@@ -476,8 +480,11 @@ export function apply(ctx, config = {}) {
           );
         }
       }
-      // Boot once: the VM only becomes startable now that it knows its paths.
-      if (preferAutoStart && !autoStartKicked && report && report.avdPresent && vm.emulatorPath) {
+      // Boot once: the VM only becomes startable now that it knows its paths. Use a dedicated
+      // one-shot flag (not autoStartKicked) so a partially configured host that already tried to
+      // start before provisioning finished still boots after the environment becomes ready.
+      if (preferAutoStart && !provisionAutoStarted && report && report.ok && vm.emulatorPath) {
+        provisionAutoStarted = true;
         autoStartKicked = true;
         void ensureStarted();
       }
@@ -497,6 +504,7 @@ export function apply(ctx, config = {}) {
       platform: process.platform,
       jdkRoot: configuredJdkRoot,
       jdkMirror: cfg.jdkMirror,
+      jdkVersion: cfg.jdkVersion,
       log: autoSetupLog,
       onUpdate: (snapshot) => {
         if (snapshot.state === lastAutoSetupState) return;
@@ -832,6 +840,14 @@ export function apply(ctx, config = {}) {
       : path.join(rootsFor()[0] || process.cwd(), '.apk-vm', 'skills'),
   });
   const skillRecorder = new SkillRecorder({ store: skillStore });
+  // Graphical agent activity timeline ("what did the Agent do in the VM?"):
+  // every apk_vm tool call is appended to a small JSONL ring, optionally with
+  // a screenshot for mutating actions, and the panel renders it as a timeline.
+  const activityLog = new ActivityLog(
+    cfg.activityDir
+      ? { rootDir: path.resolve(String(cfg.activityDir)) }
+      : { dataDir: rootsFor()[0] || process.cwd() },
+  );
   const snapshotApk = () => (lastApk ? { ...lastApk } : null);
 
   /** Resolve, install and launch one APK; shared by the HTTP route, upload and Agent tool. */
@@ -897,29 +913,73 @@ export function apply(ctx, config = {}) {
     await fsp.rm(uploadDir, { recursive: true, force: true }).catch(() => {});
   }
 
+  /**
+   * Canonicalize a path for containment checks: resolve symlinks/junctions when
+   * the path exists, otherwise canonicalize the deepest existing parent. This
+   * makes Windows drive-letter case and slash direction irrelevant.
+   */
+  function canonicalLocalPath(value) {
+    const resolved = path.resolve(value);
+    try {
+      return realpathSync.native(resolved);
+    } catch {
+      const parent = path.dirname(resolved);
+      if (parent === resolved) return resolved;
+      try {
+        return path.join(canonicalLocalPath(parent), path.basename(resolved));
+      } catch {
+        return resolved;
+      }
+    }
+  }
+
+  /** Comparison key for allowed-root checks (case-insensitive separators on win32). */
+  function localPathKey(value) {
+    let key = canonicalLocalPath(value);
+    if (process.platform === 'win32') key = key.replace(/\//g, '\\').toLowerCase();
+    // Keep filesystem roots ('/' or 'c:\') intact; then drop a trailing separator.
+    if (key.length > 1 && key.endsWith(path.sep)) key = key.slice(0, -1);
+    return key;
+  }
+
+  function localPathInside(key, rootKey) {
+    if (key === rootKey) return true;
+    return key.startsWith(rootKey.endsWith(path.sep) ? rootKey : `${rootKey}${path.sep}`);
+  }
+
+  function describeDebugRoots(roots) {
+    return roots.map((root) => `  - ${path.resolve(root)}`).join('\n');
+  }
+
   /** Resolve a host-side path for debug push/pull, confined to the scan roots + temp. */
   function resolveDebugLocal(candidate, mustExist) {
     const raw = String(candidate || '').trim();
     if (!raw) throw new Error('local path is required');
     const roots = [...rootsFor(), os.tmpdir()];
+    const rootKeys = roots.map((root) => localPathKey(root));
     const candidates = [raw];
     if (!path.isAbsolute(raw)) for (const root of roots) candidates.push(path.join(root, raw));
+    let outside = null;
     for (const value of candidates) {
       try {
         const resolved = path.resolve(value);
-        const allowed = roots.some((root) => {
-          const base = path.resolve(root);
-          return resolved === base || resolved.startsWith(base + path.sep);
-        });
-        if (!allowed) continue;
+        const key = localPathKey(resolved);
+        if (!rootKeys.some((rootKey) => localPathInside(key, rootKey))) {
+          if (!outside) outside = resolved;
+          continue;
+        }
         if (!mustExist || existsSync(resolved)) return resolved;
       } catch {
         /* try next */
       }
     }
-    throw new Error(
-      mustExist ? `local file not found under an allowed root: ${raw}` : `local path must be under ${roots.join(', ')}`,
-    );
+    if (outside) {
+      throw new Error(
+        `local path is outside the allowed roots: ${outside}\nAllowed roots:\n${describeDebugRoots(roots)}\n` +
+          'Move the file under one of these roots, or add its directory to the plugin `roots` config.',
+      );
+    }
+    throw new Error(`local file not found: ${raw}\nAllowed roots:\n${describeDebugRoots(roots)}`);
   }
 
   /** Idempotent background start used by prewarm / auto-start / the Start button. */
@@ -1036,6 +1096,13 @@ export function apply(ctx, config = {}) {
       setup: { autoSetup: activeAutoSetup().status() },
       roots: rootsFor(),
     };
+  }
+
+  /** Android SDK root shared by the storage route and the apk_vm storage action. */
+  function storageSdkRoot() {
+    if (vm.sdkRoot) return vm.sdkRoot;
+    if (vm.adbPath) return path.dirname(path.dirname(vm.adbPath));
+    return process.env.ANDROID_HOME || process.env.ANDROID_SDK_ROOT || null;
   }
 
   function mountRoutes(webServer) {
@@ -1531,12 +1598,6 @@ export function apply(ctx, config = {}) {
     register('/apk-vm/controls', async (req, res) => {
       await handleControlRequest(req, res, 'default', () => defaultToolApi());
     });
-
-    function storageSdkRoot() {
-      if (vm.sdkRoot) return vm.sdkRoot;
-      if (vm.adbPath) return path.dirname(path.dirname(vm.adbPath));
-      return process.env.ANDROID_HOME || process.env.ANDROID_SDK_ROOT || null;
-    }
 
     register('/apk-vm/storage', async (req, res) => {
       const known = () => {
@@ -2422,6 +2483,76 @@ export function apply(ctx, config = {}) {
       );
       sendJson(res, 200, { ok: true });
     });
+
+    // ---- Agent activity log ------------------------------------------------
+    // One prefix route: the host router matches exact paths literally, and the
+    // panel needs /activity, /activity/<id>/shot and /activity/clear.
+    const activityPrefix = '/apk-vm/activity';
+    disposers.push(
+      webServer.register({
+        kind: 'prefix',
+        path: activityPrefix,
+        handler: wrapHandler(async (req, res) => {
+          const pathname = new URL(String(req.url || '/'), 'http://localhost').pathname;
+          const rest = pathname.slice(activityPrefix.length).replace(/^\/+/, '');
+          try {
+            if (req.method === 'POST' && rest === 'clear') {
+              sendJson(res, 200, { ok: true, action: 'clear', ...(await activityLog.clear()) });
+              return;
+            }
+            if (req.method !== 'GET') {
+              sendError(res, 405, 'GET only (POST /apk-vm/activity/clear clears the log)');
+              return;
+            }
+            if (rest === '' || rest === 'list') {
+              const query = requestQuery(req);
+              const okParam = query.get('ok');
+              const page = await activityLog.list({
+                limit: query.get('limit') ? Number(query.get('limit')) : undefined,
+                beforeId: query.get('beforeId') || undefined,
+                action: query.get('action') || undefined,
+                instanceId: query.get('instanceId') || undefined,
+                ok:
+                  okParam === null || okParam === ''
+                    ? undefined
+                    : okParam === 'true' || okParam === '1',
+              });
+              sendJson(res, 200, { ok: true, enabled: true, ...page });
+              return;
+            }
+            const shotMatch = /^([A-Za-z0-9_-]{1,128})\/shot$/.exec(rest);
+            if (shotMatch) {
+              const shot = await activityLog.shot(shotMatch[1]);
+              if (!shot) {
+                sendError(res, 404, 'activity shot not found');
+                return;
+              }
+              res.writeHead(200, {
+                'content-type': shot.mediaType || 'image/png',
+                'content-length': shot.buffer.length,
+                'cache-control': 'no-store',
+                'x-content-type-options': 'nosniff',
+              });
+              res.end(shot.buffer);
+              return;
+            }
+            const entryMatch = /^([A-Za-z0-9_-]{1,128})$/.exec(rest);
+            if (entryMatch) {
+              const entry = await activityLog.get(entryMatch[1]);
+              if (!entry) {
+                sendError(res, 404, 'activity entry not found');
+                return;
+              }
+              sendJson(res, 200, { ok: true, entry });
+              return;
+            }
+            sendError(res, 404, `unknown activity route: /apk-vm/activity/${rest}`);
+          } catch (error) {
+            sendError(res, 500, `activity log failed: ${(error && error.message) || error}`);
+          }
+        }),
+      }),
+    );
 
     register('/apk-vm/apk-info', async (req, res) => {
       if (req.method !== 'GET') {
@@ -3908,6 +4039,73 @@ export function apply(ctx, config = {}) {
     throw new Error(`unsupported control action: ${action}`);
   }
 
+  // Mutating actions get a best-effort frame in the activity timeline so the
+  // panel can show what the screen looked like after the Agent's input.
+  const ACTIVITY_SHOT_ACTIONS = new Set([
+    'tap',
+    'swipe',
+    'long_press',
+    'key',
+    'text',
+    'install',
+    'type_text',
+    'tap_selector',
+    'tap_css',
+    'control_tap',
+    'control_input',
+    'control_long_press',
+    'control_swipe',
+  ]);
+
+  function activityArgsPreview(args) {
+    try {
+      const text = JSON.stringify(args && typeof args === 'object' ? args : {});
+      return text.length > 700 ? `${text.slice(0, 700)}…` : text;
+    } catch {
+      return null;
+    }
+  }
+
+  async function captureActivityShot(args) {
+    const requested = String((args && args.instance) || '').trim();
+    try {
+      let png = null;
+      if (requested && requested !== 'default') {
+        const instance = instanceManager ? instanceManager.get(requested) : null;
+        png = instance ? await instance.screenshot() : null;
+      } else {
+        png = await vm.screenshot();
+      }
+      return png && png.length ? Buffer.from(png) : null;
+    } catch {
+      return null;
+    }
+  }
+
+  async function recordToolActivity(args, outcome, startedAt) {
+    try {
+      const action = String((args && args.action) || '').toLowerCase() || '(missing)';
+      const ok = !(outcome && outcome.ok === false);
+      const failure = outcome && outcome.result && outcome.result.error;
+      let shot = null;
+      if (ACTIVITY_SHOT_ACTIONS.has(action)) shot = await captureActivityShot(args);
+      await activityLog.record({
+        action,
+        source: 'tool',
+        tool: 'apk_vm',
+        instanceId: String((args && args.instance) || 'default'),
+        summary: outcome && outcome.summary ? String(outcome.summary).slice(0, 500) : ok ? 'ok' : 'failed',
+        ok,
+        error: failure ? String((failure && failure.message) || failure).slice(0, 800) : null,
+        durationMs: Math.max(0, Date.now() - startedAt),
+        argsPreview: activityArgsPreview(args),
+        shot: shot || undefined,
+      });
+    } catch {
+      /* activity logging must never break the tool */
+    }
+  }
+
   const apkVmTool = {
     name: 'apk_vm',
     description:
@@ -4047,11 +4245,38 @@ export function apply(ctx, config = {}) {
     },
     timeoutMs: 180000,
     async execute(args, exec) {
-      return losslessJson(await this.executeInner(args, exec));
+      const startedAt = Date.now();
+      let outcome;
+      try {
+        outcome = losslessJson(await this.executeInner(args, exec));
+      } catch (error) {
+        // Tool results must survive a lossless JSON round-trip, so surface a
+        // thrown failure as the structured { ok:false, summary, result } result
+        // the host tool boundary (and the renderer) already understands.
+        const action = String((args && args.action) || '').toLowerCase() || '(missing)';
+        const failure = losslessJson(error);
+        const message = (failure && failure.message) || String(failure);
+        outcome = losslessJson({
+          ok: false,
+          summary: `apk_vm ${action} failed: ${message}`,
+          result: { action, error: failure },
+        });
+      }
+      // Fire-and-forget: the timeline must never slow down the Agent's call.
+      void recordToolActivity(args, outcome, startedAt);
+      return outcome;
     },
 
     async executeInner(args, exec) {
       const action = String((args && args.action) || '').toLowerCase();
+
+      // Resolve the VM handle lazily: only actions that actually reach the
+      // device should trigger owner assignment/leasing.
+      let toolApiPromise = null;
+      const getToolApi = () => {
+        if (!toolApiPromise) toolApiPromise = resolveToolApi(args, exec);
+        return toolApiPromise;
+      };
 
       if (action === 'list_instances') {
         const defaultStatus = await vm.status();
@@ -4105,6 +4330,7 @@ export function apply(ctx, config = {}) {
       }
 
       if (action === 'env_snapshot') {
+        const api = await getToolApi();
         const snapshot = await api.captureEnv();
         return {
           ok: true,
@@ -4114,6 +4340,7 @@ export function apply(ctx, config = {}) {
       }
       if (action === 'env_restore') {
         if (!args.envSnapshot || typeof args.envSnapshot !== 'object') throw new Error('env_restore requires envSnapshot');
+        const api = await getToolApi();
         const result = await api.restoreEnv(args.envSnapshot);
         return { ok: result.ok === true, summary: `restored ${result.applied.length} env item(s)${result.errors.length ? `; ${result.errors.length} failed` : ''}`, result };
       }
@@ -4122,6 +4349,7 @@ export function apply(ctx, config = {}) {
           ? args.adbArgs.map(String)
           : String(args.adbCommand || '').trim().split(/\s+/).filter(Boolean);
         if (!adbArgs.length) throw new Error('adb requires adbArgs or adbCommand');
+        const api = await getToolApi();
         const raw = await api.adb(adbArgs, { timeoutMs: Math.min(120000, Number(args.timeoutMs) || 30000), maxBytes: 2 * 1024 * 1024 });
         const asText = (value) => {
           if (value == null) return '';
@@ -4206,7 +4434,7 @@ export function apply(ctx, config = {}) {
         };
       }
 
-      const api = await resolveToolApi(args, exec);
+      const api = await getToolApi();
       if (action === 'flow_list') {
         return {
           ok: true,

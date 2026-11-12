@@ -4,8 +4,8 @@
 
 | Version | Supported |
 | --- | --- |
-| 0.12.x (current) | Yes |
-| < 0.12 | No |
+| 1.0.x (current) | Yes |
+| < 1.0 | No |
 
 The plugin is a local development tool. It is not designed or hardened as a multi-tenant or
 network-exposed service.

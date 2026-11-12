@@ -177,8 +177,8 @@ window.__ModuleLoader__.load({
       'manual.hint': 'Absolute APK file path on this machine.',
       'log.title': 'VM log',
       'log.waiting': 'Waiting for VM output…',
-      'hint.boot': 'An x86_64 Android image needs CPU hardware acceleration (AEHD/WHPX). If booting does not finish, enable it and restart Windows once; the plugin then saves a quick-boot snapshot so later starts stay under 30 s.',
-      'hint.short': 'Android 14 · x86_64 · AEHD · H.264 60 fps',
+      'hint.boot': 'An Android image needs CPU hardware acceleration (AEHD/WHPX on Windows, KVM on Linux, Hypervisor.Framework on macOS). If booting does not finish, enable it and restart once; the plugin then saves a quick-boot snapshot so later starts stay under 30 s.',
+      'hint.short': 'Android 14 · AEHD/WHPX · H.264 60 fps',
       'overlay.connecting': 'Connecting to the VM service…',
       'overlay.stopped': 'The virtual machine is not running',
       'overlay.startedHint': 'Start the VM, then install an APK from the list on the left.',
@@ -348,6 +348,39 @@ window.__ModuleLoader__.load({
       'setup.autoDisabled': 'Automatic setup is disabled; set up the environment manually.',
       'setup.java': 'Java (JDK 17+)',
       'setup.javaMissing': 'Java not found',
+      'activity.title': 'Agent activity',
+      'activity.count': '{count} events',
+      'activity.refresh': 'Refresh',
+      'activity.clear': 'Clear log',
+      'activity.clearConfirm': 'Clear all recorded agent activity? This cannot be undone.',
+      'activity.cleared': 'Activity log cleared.',
+      'activity.clearFailed': 'Could not clear the activity log.',
+      'activity.loadFailed': 'Could not load agent activity.',
+      'activity.unavailable': 'The activity log is not available yet; this panel works once the server routes are registered.',
+      'activity.empty': 'No agent activity recorded yet.',
+      'activity.loading': 'Loading activity…',
+      'activity.allInstances': 'All VMs',
+      'activity.instanceOption': 'VM {id}',
+      'activity.allActions': 'All actions',
+      'activity.errorsOnly': 'Errors only',
+      'activity.loadMore': 'Load older',
+      'activity.detail': 'Activity detail',
+      'activity.close': 'Close',
+      'activity.noShot': 'No screenshot for this event.',
+      'activity.shotAlt': 'Screenshot captured for this activity',
+      'activity.time': 'Time',
+      'activity.action': 'Action',
+      'activity.status': 'Status',
+      'activity.statusOk': 'ok',
+      'activity.statusError': 'error',
+      'activity.instance': 'VM',
+      'activity.tool': 'Tool',
+      'activity.source': 'Source',
+      'activity.duration': 'Duration',
+      'activity.summary': 'Summary',
+      'activity.error': 'Error',
+      'activity.args': 'Arguments',
+      'activity.id': 'Event ID',
       'instances.label': 'VM instance',
       'instances.default': 'default',
       'instances.new': 'New VM',
@@ -508,8 +541,8 @@ window.__ModuleLoader__.load({
       'manual.hint': '本机 APK 文件的绝对路径。',
       'log.title': '虚拟机日志',
       'log.waiting': '等待虚拟机输出…',
-      'hint.boot': 'x86_64 Android 镜像需要 CPU 硬件加速（AEHD/WHPX）。若长时间停在“正在开机”，请启用硬件加速并重启一次 Windows；之后插件会把冷启动保存为快照，后续启动保持在 30 秒内。',
-      'hint.short': 'Android 14 · x86_64 · AEHD · H.264 60fps',
+      'hint.boot': 'Android 镜像需要 CPU 硬件加速（Windows 用 AEHD/WHPX，Linux 用 KVM，macOS 用 Hypervisor.Framework）。若长时间停在“正在开机”，请启用硬件加速并重启一次；之后插件会把冷启动保存为快照，后续启动保持在 30 秒内。',
+      'hint.short': 'Android 14 · AEHD/WHPX · H.264 60fps',
       'overlay.connecting': '正在连接虚拟机服务…',
       'overlay.stopped': '虚拟机尚未运行',
       'overlay.startedHint': '启动虚拟机后，即可从左侧列表安装 APK。',
@@ -679,6 +712,39 @@ window.__ModuleLoader__.load({
       'setup.autoDisabled': '自动安装已关闭，请手动配置环境。',
       'setup.java': 'Java（JDK 17+）',
       'setup.javaMissing': '未找到 Java',
+      'activity.title': 'Agent 活动',
+      'activity.count': '{count} 条记录',
+      'activity.refresh': '刷新',
+      'activity.clear': '清空记录',
+      'activity.clearConfirm': '清空所有已记录的 Agent 活动？此操作不可撤销。',
+      'activity.cleared': '活动记录已清空。',
+      'activity.clearFailed': '清空活动记录失败。',
+      'activity.loadFailed': '加载 Agent 活动失败。',
+      'activity.unavailable': '活动日志暂不可用；服务端路由注册后此面板即可使用。',
+      'activity.empty': '暂无 Agent 活动记录。',
+      'activity.loading': '正在加载活动…',
+      'activity.allInstances': '所有虚拟机',
+      'activity.instanceOption': '虚拟机 {id}',
+      'activity.allActions': '所有动作',
+      'activity.errorsOnly': '仅错误',
+      'activity.loadMore': '加载更早记录',
+      'activity.detail': '活动详情',
+      'activity.close': '关闭',
+      'activity.noShot': '该事件没有截图。',
+      'activity.shotAlt': '该活动的截图',
+      'activity.time': '时间',
+      'activity.action': '动作',
+      'activity.status': '状态',
+      'activity.statusOk': '成功',
+      'activity.statusError': '错误',
+      'activity.instance': '虚拟机',
+      'activity.tool': '工具',
+      'activity.source': '来源',
+      'activity.duration': '耗时',
+      'activity.summary': '摘要',
+      'activity.error': '错误',
+      'activity.args': '参数',
+      'activity.id': '事件 ID',
       'instances.label': '虚拟机实例',
       'instances.default': '默认',
       'instances.new': '新建虚拟机',
@@ -1368,7 +1434,520 @@ window.__ModuleLoader__.load({
       '.apkvm-page.apkvm-floating .apkvm-stage .apkvm-screen{border-radius:11px}' +
       '.apkvm-page.apkvm-floating .apkvm-stage .apkvm-controls{gap:3px;max-width:100%}' +
       '.apkvm-page.apkvm-floating .apkvm-stage .apkvm-textrow{display:none}' +
-      '.apkvm-page.apkvm-floating .apkvm-stage .apkvm-stagehint{display:none}';
+      '.apkvm-page.apkvm-floating .apkvm-stage .apkvm-stagehint{display:none}' +
+      '.apkvm-activity-body{display:flex;flex-direction:column;gap:6px}' +
+      '.apkvm-activity-controls{display:flex;flex-wrap:wrap;align-items:center;gap:4px}' +
+      '.apkvm-activity-select{font:inherit;font-size:11px;height:24px;max-width:150px;padding:0 5px;border-radius:7px;border:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-base);color:var(--dsw-alias-label-primary);flex:none}' +
+      '.apkvm-activity-check{display:inline-flex;align-items:center;gap:4px;font-size:11px;color:var(--dsw-alias-label-secondary);cursor:pointer}' +
+      '.apkvm-activity-list{display:flex;flex-direction:column;gap:4px;max-height:320px;overflow:auto}' +
+      '.apkvm-activity-row{appearance:none;font:inherit;display:flex;align-items:center;gap:6px;width:100%;text-align:left;cursor:pointer;padding:4px 6px;border-radius:8px;border:1px solid var(--dsw-alias-border-l1);background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-primary)}' +
+      '.apkvm-activity-row:hover{border-color:var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-layer-2)}' +
+      '.apkvm-activity-row.error{border-color:var(--dsw-alias-state-error-primary)}' +
+      '.apkvm-activity-time{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:10px;color:var(--dsw-alias-label-secondary);flex:none}' +
+      '.apkvm-activity-badge{flex:none;font-size:10px;font-weight:600;padding:1px 5px;border-radius:6px;background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-secondary);max-width:92px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}' +
+      '.apkvm-activity-badge.error{background:var(--dsw-alias-state-error-primary);color:var(--dsw-alias-bg-base)}' +
+      '.apkvm-activity-main{flex:1 1 auto;min-width:0;display:flex;flex-direction:column;gap:1px}' +
+      '.apkvm-activity-summary{font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}' +
+      '.apkvm-activity-meta{display:flex;align-items:center;gap:4px;font-size:10px;color:var(--dsw-alias-label-secondary)}' +
+      '.apkvm-activity-thumb{flex:none;width:34px;height:44px;object-fit:cover;border-radius:5px;border:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-base)}' +
+      '.apkvm-activity-footer{display:flex;align-items:center;gap:6px}' +
+      '.apkvm-activity-note{font-size:10px;color:var(--dsw-alias-label-secondary)}' +
+      '.apkvm-activity-overlay{position:fixed;inset:0;z-index:2147483001;background:var(--dsw-alias-bg-base);display:flex;align-items:center;justify-content:center;padding:16px}' +
+      '.apkvm-activity-sheet{width:min(560px,94vw);max-height:88vh;overflow:auto;display:flex;flex-direction:column;gap:8px;padding:12px;border-radius:14px;border:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-layer-1)}' +
+      '.apkvm-activity-sheethead{display:flex;align-items:center;gap:6px}' +
+      '.apkvm-activity-fullshot{width:100%;max-height:56vh;object-fit:contain;background:var(--dsw-alias-bg-base);border-radius:10px;border:1px solid var(--dsw-alias-border-l1)}' +
+      '.apkvm-activity-detail{display:flex;flex-direction:column;gap:2px}' +
+      '.apkvm-activity-detailrow{display:flex;gap:8px;font-size:11px;align-items:baseline}' +
+      '.apkvm-activity-detaillabel{flex:0 0 72px;color:var(--dsw-alias-label-secondary)}' +
+      '.apkvm-activity-detailvalue{flex:1 1 auto;min-width:0;word-break:break-word}' +
+      '.apkvm-activity-args{margin:0;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:10px;white-space:pre-wrap;word-break:break-all;max-height:140px;overflow:auto;background:var(--dsw-alias-bg-base);border-radius:8px;border:1px solid var(--dsw-alias-border-l1);padding:6px;color:var(--dsw-alias-label-primary);flex:1 1 auto;min-width:0}' +
+      '.apkvm-activity-errtext{color:var(--dsw-alias-state-error-primary)}';
+
+    /* ------------------------------------------------------------------ *
+     * Agent activity timeline: a read-only view over the optional activity
+     * HTTP routes. The card degrades to a friendly message when the routes
+     * are not registered yet (the data layer ships before server wiring).
+     * It owns its state so the main page hook order never changes.
+     * ------------------------------------------------------------------ */
+
+    function createActivityCard(getTranslate) {
+      function pad2(value) {
+        return (value < 10 ? '0' : '') + value;
+      }
+
+      function formatClock(value) {
+        if (typeof value !== 'string' || !value) return '--:--:--';
+        var parsed = new Date(value);
+        if (isNaN(parsed.getTime())) return '--:--:--';
+        return pad2(parsed.getHours()) + ':' + pad2(parsed.getMinutes()) + ':' + pad2(parsed.getSeconds());
+      }
+
+      function formatDuration(value) {
+        if (typeof value !== 'number' || !isFinite(value) || value < 0) return '';
+        if (value < 1000) return Math.round(value) + ' ms';
+        return Math.round(value / 100) / 10 + ' s';
+      }
+
+      function textValue(value) {
+        return typeof value === 'string' ? value : '';
+      }
+
+      function ActivityCard(props) {
+        var propsSafe = isObject(props) ? props : {};
+        var translate = typeof propsSafe.t === 'function' ? propsSafe.t : getTranslate();
+        var T = createTranslator(translate);
+        var currentInstanceId =
+          typeof propsSafe.instanceId === 'string' && propsSafe.instanceId ? propsSafe.instanceId : 'default';
+        var instanceOptions = Array.isArray(propsSafe.instances) ? propsSafe.instances : [];
+        var panelVisible = propsSafe.visible === undefined ? true : propsSafe.visible !== false;
+
+        var openState = React.useState(false);
+        var open = openState[0];
+        var setOpen = openState[1];
+
+        var entriesState = React.useState([]);
+        var entries = entriesState[0];
+        var setEntries = entriesState[1];
+
+        var loadingState = React.useState(false);
+        var loading = loadingState[0];
+        var setLoading = loadingState[1];
+
+        var errorState = React.useState('');
+        var error = errorState[0];
+        var setError = errorState[1];
+
+        var unavailableState = React.useState(false);
+        var unavailable = unavailableState[0];
+        var setUnavailable = unavailableState[1];
+
+        var cursorState = React.useState(null);
+        var cursor = cursorState[0];
+        var setCursor = cursorState[1];
+
+        var statsState = React.useState(null);
+        var stats = statsState[0];
+        var setStats = statsState[1];
+
+        var knownActionsState = React.useState([]);
+        var knownActions = knownActionsState[0];
+        var setKnownActions = knownActionsState[1];
+
+        var instancePickState = React.useState(currentInstanceId);
+        var instancePick = instancePickState[0];
+        var setInstancePick = instancePickState[1];
+
+        var actionPickState = React.useState('');
+        var actionPick = actionPickState[0];
+        var setActionPick = actionPickState[1];
+
+        var errorsOnlyState = React.useState(false);
+        var errorsOnly = errorsOnlyState[0];
+        var setErrorsOnly = errorsOnlyState[1];
+
+        var selectedState = React.useState(null);
+        var selected = selectedState[0];
+        var setSelected = selectedState[1];
+
+        var refreshTickState = React.useState(0);
+        var refreshTick = refreshTickState[0];
+        var setRefreshTick = refreshTickState[1];
+
+        var noticeState = React.useState('');
+        var notice = noticeState[0];
+        var setNotice = noticeState[1];
+
+        var busyState = React.useState(false);
+        var busy = busyState[0];
+        var setBusy = busyState[1];
+
+        var entriesRef = React.useRef([]);
+        var actionsRef = React.useRef([]);
+        var requestSeqRef = React.useRef(0);
+
+        React.useEffect(
+          function () {
+            setInstancePick(currentInstanceId);
+          },
+          [currentInstanceId]
+        );
+
+        function loadPage(beforeId, append) {
+          requestSeqRef.current += 1;
+          var seq = requestSeqRef.current;
+          setLoading(true);
+          setError('');
+          setNotice('');
+          var params = ['limit=60'];
+          if (instancePick) params.push('instanceId=' + encodeURIComponent(instancePick));
+          if (actionPick) params.push('action=' + encodeURIComponent(actionPick));
+          if (errorsOnly) params.push('ok=false');
+          if (beforeId) params.push('beforeId=' + encodeURIComponent(beforeId));
+          requestJson('/apk-vm/activity?' + params.join('&'), { method: 'GET' }, T).then(function (response) {
+            if (seq !== requestSeqRef.current) return;
+            setLoading(false);
+            if (!response || response.ok !== true) {
+              var status = response && typeof response.status === 'number' ? response.status : 0;
+              if (status === 404) {
+                setUnavailable(true);
+                entriesRef.current = [];
+                setEntries([]);
+                setCursor(null);
+                setStats(null);
+              } else {
+                setError((response && response.error) || T('activity.loadFailed'));
+              }
+              return;
+            }
+            setUnavailable(false);
+            var data = isObject(response.data) ? response.data : {};
+            var page = Array.isArray(data.entries) ? data.entries : [];
+            var merged = append ? entriesRef.current.concat(page) : page;
+            entriesRef.current = merged;
+            setEntries(merged);
+            setCursor(typeof data.nextId === 'string' && data.nextId ? data.nextId : null);
+            setStats(isObject(data.stats) ? data.stats : null);
+            var union = actionsRef.current.slice();
+            for (var index = 0; index < page.length; index += 1) {
+              var actionName = page[index] && typeof page[index].action === 'string' ? page[index].action : '';
+              if (actionName && union.indexOf(actionName) === -1) union.push(actionName);
+            }
+            actionsRef.current = union;
+            setKnownActions(union);
+          });
+        }
+
+        React.useEffect(
+          function () {
+            if (!open || !panelVisible) return undefined;
+            loadPage(null, false);
+            var timer = setTimeout(function () {
+              setRefreshTick(function (value) {
+                return value + 1;
+              });
+            }, 3000);
+            return function () {
+              if (typeof clearTimeout === 'function') clearTimeout(timer);
+            };
+          },
+          [open, panelVisible, instancePick, actionPick, errorsOnly, refreshTick]
+        );
+
+        function refresh() {
+          setRefreshTick(function (value) {
+            return value + 1;
+          });
+        }
+
+        function clearLog() {
+          var confirmed = true;
+          if (typeof window !== 'undefined' && typeof window.confirm === 'function') {
+            try {
+              confirmed = window.confirm(T('activity.clearConfirm'));
+            } catch (error) {
+              confirmed = false;
+            }
+          }
+          if (!confirmed) return;
+          setBusy(true);
+          requestSeqRef.current += 1;
+          setLoading(false);
+          requestJson('/apk-vm/activity/clear', { method: 'POST', body: '{}' }, T).then(function (response) {
+            setBusy(false);
+            if (!response || response.ok !== true) {
+              setError((response && response.error) || T('activity.clearFailed'));
+              return;
+            }
+            entriesRef.current = [];
+            actionsRef.current = [];
+            setEntries([]);
+            setKnownActions([]);
+            setCursor(null);
+            setStats(null);
+            setUnavailable(false);
+            setError('');
+            setSelected(null);
+            setNotice(T('activity.cleared'));
+          });
+        }
+
+        function miniButton(label, onClick, options) {
+          var opts = isObject(options) ? options : {};
+          return h(
+            'button',
+            {
+              type: 'button',
+              className: 'apkvm-mini' + (opts.active ? ' active' : '') + (opts.danger ? ' danger' : ''),
+              disabled: Boolean(opts.disabled),
+              title: typeof opts.title === 'string' ? opts.title : label,
+              onClick: function (event) {
+                if (event && typeof event.preventDefault === 'function') event.preventDefault();
+                onClick();
+              },
+            },
+            label
+          );
+        }
+
+        function renderDetailRow(label, value, extraClass) {
+          return h(
+            'div',
+            { className: 'apkvm-activity-detailrow', key: 'detail-' + label },
+            h('span', { className: 'apkvm-activity-detaillabel' }, label),
+            h('span', { className: 'apkvm-activity-detailvalue' + (extraClass ? ' ' + extraClass : '') }, value)
+          );
+        }
+
+        function renderOverlay(entry) {
+          var isError = entry.ok === false;
+          var shotSrc = entry.shotId ? '/apk-vm/activity/' + encodeURIComponent(entry.id) + '/shot' : '';
+          var args = textValue(entry.argsPreview);
+          var errorText = textValue(entry.error);
+          return h(
+            'div',
+            {
+              className: 'apkvm-activity-overlay',
+              role: 'dialog',
+              'aria-modal': 'true',
+              'aria-label': T('activity.detail'),
+              onClick: function (event) {
+                if (event && event.target === event.currentTarget) setSelected(null);
+              },
+            },
+            h(
+              'div',
+              { className: 'apkvm-activity-sheet' },
+              h(
+                'div',
+                { className: 'apkvm-activity-sheethead' },
+                h('span', { className: 'apkvm-card-title' }, T('activity.detail')),
+                h('span', { style: { marginLeft: 'auto' } }),
+                miniButton(T('activity.close'), function () {
+                  setSelected(null);
+                })
+              ),
+              shotSrc
+                ? h('img', { className: 'apkvm-activity-fullshot', src: shotSrc, alt: T('activity.shotAlt') })
+                : h('div', { className: 'apkvm-empty' }, T('activity.noShot')),
+              h(
+                'div',
+                { className: 'apkvm-activity-detail' },
+                renderDetailRow(T('activity.time'), formatClock(entry.at) + ' · ' + textValue(entry.at)),
+                renderDetailRow(T('activity.action'), textValue(entry.action) || '—'),
+                renderDetailRow(
+                  T('activity.status'),
+                  isError ? T('activity.statusError') : T('activity.statusOk'),
+                  isError ? 'apkvm-activity-errtext' : ''
+                ),
+                renderDetailRow(T('activity.instance'), textValue(entry.instanceId) || 'default'),
+                renderDetailRow(T('activity.tool'), textValue(entry.tool) || '—'),
+                renderDetailRow(T('activity.source'), textValue(entry.source) || 'tool'),
+                renderDetailRow(T('activity.duration'), formatDuration(entry.durationMs) || '—'),
+                renderDetailRow(T('activity.summary'), textValue(entry.summary) || '—'),
+                errorText ? renderDetailRow(T('activity.error'), errorText, 'apkvm-activity-errtext') : null,
+                args
+                  ? h(
+                      'div',
+                      { className: 'apkvm-activity-detailrow' },
+                      h('span', { className: 'apkvm-activity-detaillabel' }, T('activity.args')),
+                      h('pre', { className: 'apkvm-activity-args' }, args)
+                    )
+                  : null,
+                renderDetailRow(T('activity.id'), textValue(entry.id) || '—')
+              )
+            )
+          );
+        }
+
+        function renderRow(entry, index) {
+          var isError = entry.ok === false;
+          var summary = textValue(entry.summary) || textValue(entry.error) || textValue(entry.action) || '?';
+          var thumbnail = entry.shotId
+            ? h('img', {
+                className: 'apkvm-activity-thumb',
+                src: '/apk-vm/activity/' + encodeURIComponent(entry.id) + '/shot',
+                alt: T('activity.shotAlt'),
+                loading: 'lazy',
+              })
+            : null;
+          return h(
+            'button',
+            {
+              key: (textValue(entry.id) || 'activity') + ':' + index,
+              type: 'button',
+              className: 'apkvm-activity-row' + (isError ? ' error' : ''),
+              title: summary,
+              onClick: function (event) {
+                if (event && typeof event.preventDefault === 'function') event.preventDefault();
+                setSelected(entry);
+              },
+            },
+            h('span', { className: 'apkvm-activity-time' }, formatClock(entry.at)),
+            h(
+              'span',
+              { className: 'apkvm-activity-badge' + (isError ? ' error' : '') },
+              textValue(entry.action) || '?'
+            ),
+            h(
+              'span',
+              { className: 'apkvm-activity-main' },
+              h('span', { className: 'apkvm-activity-summary' }, summary),
+              h(
+                'span',
+                { className: 'apkvm-activity-meta' },
+                h('span', { className: 'apkvm-tag' + (isError ? '' : ' ok') }, textValue(entry.instanceId) || 'default'),
+                entry.durationMs !== null && entry.durationMs !== undefined
+                  ? h('span', { className: 'apkvm-dim' }, formatDuration(entry.durationMs))
+                  : null,
+                entry.shotId ? h('span', { className: 'apkvm-dim', title: T('activity.shotAlt') }, '▣') : null
+              )
+            ),
+            thumbnail
+          );
+        }
+
+        var statusEl = null;
+        if (unavailable) {
+          statusEl = h('div', { className: 'apkvm-empty' }, T('activity.unavailable'));
+        } else if (error && entries.length === 0 && !loading) {
+          statusEl = h('div', { className: 'apkvm-inline-error' }, error);
+        } else if (loading && entries.length === 0) {
+          statusEl = h('div', { className: 'apkvm-empty' }, T('activity.loading'));
+        } else if (entries.length === 0) {
+          statusEl = h('div', { className: 'apkvm-empty' }, T('activity.empty'));
+        }
+
+        var actionOptions = knownActions.slice();
+        if (actionPick && actionOptions.indexOf(actionPick) === -1) actionOptions.unshift(actionPick);
+        var instanceChoices = instanceOptions.filter(function (entry) {
+          return entry && typeof entry.id === 'string' && entry.id;
+        });
+        var instanceChoiceIds = instanceChoices.map(function (entry) {
+          return entry.id;
+        });
+        var instancePickKnown = !instancePick || instanceChoiceIds.indexOf(instancePick) !== -1;
+
+        var bodyEl = h(
+          'div',
+          { className: 'apkvm-activity-body' },
+          h(
+            'div',
+            { className: 'apkvm-activity-controls' },
+            h(
+              'select',
+              {
+                className: 'apkvm-activity-select',
+                value: instancePick,
+                'aria-label': T('activity.instance'),
+                title: T('activity.instance'),
+                onChange: function (event) {
+                  setInstancePick(event && event.target ? String(event.target.value) : '');
+                },
+              },
+              h('option', { value: '' }, T('activity.allInstances')),
+              instancePickKnown
+                ? null
+                : h('option', { value: instancePick }, T('activity.instanceOption', { id: instancePick })),
+              instanceChoices.map(function (entry) {
+                return h(
+                  'option',
+                  { key: 'instance-' + entry.id, value: entry.id },
+                  entry.id === 'default' ? T('instances.default') : entry.avdName || entry.id
+                );
+              })
+            ),
+            h(
+              'select',
+              {
+                className: 'apkvm-activity-select',
+                value: actionPick,
+                'aria-label': T('activity.action'),
+                title: T('activity.action'),
+                onChange: function (event) {
+                  setActionPick(event && event.target ? String(event.target.value) : '');
+                },
+              },
+              h('option', { value: '' }, T('activity.allActions')),
+              actionOptions.map(function (actionName) {
+                return h('option', { key: 'action-' + actionName, value: actionName }, actionName);
+              })
+            ),
+            h(
+              'label',
+              { className: 'apkvm-activity-check' },
+              h('input', {
+                type: 'checkbox',
+                checked: errorsOnly,
+                onChange: function (event) {
+                  setErrorsOnly(Boolean(event && event.target && event.target.checked));
+                },
+              }),
+              T('activity.errorsOnly')
+            ),
+            h('span', { style: { marginLeft: 'auto' } }),
+            miniButton(T('activity.refresh'), refresh, { disabled: loading || busy }),
+            miniButton(T('activity.clear'), clearLog, { danger: true, disabled: busy || entries.length === 0 })
+          ),
+          stats && typeof stats.count === 'number'
+            ? h('div', { className: 'apkvm-dim' }, T('activity.count', { count: stats.count }))
+            : null,
+          statusEl,
+          entries.length > 0
+            ? h(
+                'div',
+                { className: 'apkvm-activity-list' },
+                entries.map(function (entry, index) {
+                  return renderRow(entry, index);
+                })
+              )
+            : null,
+          error && entries.length > 0 ? h('div', { className: 'apkvm-inline-error' }, error) : null,
+          cursor
+            ? h(
+                'div',
+                { className: 'apkvm-activity-footer' },
+                miniButton(
+                  T('activity.loadMore'),
+                  function () {
+                    loadPage(cursor, true);
+                  },
+                  { disabled: loading || busy }
+                )
+              )
+            : null,
+          notice ? h('div', { className: 'apkvm-activity-note' }, notice) : null
+        );
+
+        var countLabel = stats && typeof stats.count === 'number' && stats.count > 0 ? T('activity.count', { count: stats.count }) : '';
+
+        return h(
+          'details',
+          {
+            className: 'apkvm-card apkvm-activity',
+            open: open,
+            onToggle: function (event) {
+              var next = Boolean(event && event.currentTarget && event.currentTarget.open);
+              if (next === open) return;
+              setOpen(next);
+              if (!next) setSelected(null);
+              if (!next) setNotice('');
+            },
+          },
+          h(
+            'summary',
+            { className: 'apkvm-debug-summary' },
+            h('span', { className: 'apkvm-card-title' }, T('activity.title')),
+            h('span', { className: 'apkvm-dim', style: { marginLeft: 'auto' } }, countLabel),
+            h('span', { className: 'apkvm-chevron', 'aria-hidden': 'true' }, '▸')
+          ),
+          open ? bodyEl : null,
+          selected ? renderOverlay(selected) : null
+        );
+      }
+
+      ActivityCard.displayName = 'ApkvmActivityCard';
+      return ActivityCard;
+    }
 
     /* ------------------------------------------------------------------ *
      * Render-error boundary: an unexpected exception inside the panel keeps
@@ -1427,6 +2006,8 @@ window.__ModuleLoader__.load({
      * ------------------------------------------------------------------ */
 
     function createPage(getTranslate) {
+      var ActivityCard = createActivityCard(getTranslate);
+
       function ApkVmPage(props) {
         var propsSafe = isObject(props) ? props : {};
         var translate = typeof propsSafe.t === 'function' ? propsSafe.t : getTranslate();
@@ -3354,6 +3935,28 @@ window.__ModuleLoader__.load({
         var autoStep = isFinite(autoStepRaw) && autoStepRaw >= 1 ? Math.min(Math.round(autoStepRaw), autoTotalSteps) : 1;
         var autoMessage = autoSetup && typeof autoSetup.message === 'string' ? autoSetup.message : '';
         var autoError = autoSetup && typeof autoSetup.error === 'string' ? autoSetup.error : '';
+        var autoDetail = autoSetup && isObject(autoSetup.detail) ? autoSetup.detail : null;
+        var autoProgress = autoDetail && isObject(autoDetail.progress) ? autoDetail.progress : null;
+        var autoPercent =
+          autoProgress && typeof autoProgress.percent === 'number' && isFinite(autoProgress.percent)
+            ? Math.max(0, Math.min(100, autoProgress.percent))
+            : null;
+        var autoReceived =
+          autoProgress && typeof autoProgress.received === 'number' && isFinite(autoProgress.received) && autoProgress.received >= 0
+            ? autoProgress.received
+            : null;
+        var autoTotal =
+          autoProgress && typeof autoProgress.total === 'number' && isFinite(autoProgress.total) && autoProgress.total > 0
+            ? autoProgress.total
+            : null;
+        var autoMb = function (bytes) {
+          return bytes === null ? '' : Math.round(bytes / (1024 * 1024)) + ' MB';
+        };
+        var autoProgressSuffix =
+          autoPercent === null
+            ? ''
+            : autoPercent.toFixed(0) + '%' +
+              (autoReceived !== null && autoTotal !== null ? ' · ' + autoMb(autoReceived) + ' / ' + autoMb(autoTotal) : '');
         var autoRunning = autoSetupStateName === 'running';
         var autoReadyKey = autoSetup && autoSetup.finishedAt ? 'ready:' + String(autoSetup.finishedAt) : 'ready';
 
@@ -4476,7 +5079,7 @@ window.__ModuleLoader__.load({
                   className: 'apkvm-dim',
                   style: { flex: '1 1 auto', minWidth: 0, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' },
                 },
-                autoProgressText + (autoMessage ? ' · ' + autoMessage : '')
+                autoProgressText + (autoMessage ? ' · ' + autoMessage : '') + (autoProgressSuffix ? ' · ' + autoProgressSuffix : '')
               ),
               actionBtn(T('setup.autoCancel'), {
                 key: 'auto-setup-cancel',
@@ -5002,6 +5605,13 @@ window.__ModuleLoader__.load({
               : null
           )
         );
+
+        var activityCard = h(ActivityCard, {
+          instanceId: activeInstance,
+          instances: instancesList,
+          visible: tabVisible,
+          t: translate,
+        });
 
         var appsCard = h(
           'details',
@@ -6532,6 +7142,7 @@ window.__ModuleLoader__.load({
               apkCard,
               instancesCard,
               ownerCard,
+              activityCard,
               debugCard,
               flowCard,
               skillCard,

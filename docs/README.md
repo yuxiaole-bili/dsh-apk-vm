@@ -6,11 +6,9 @@ Real assets captured from the reference host:
   11.7 fps in this capture), input controls and debug surface.
 - `screenshot-sidebar.png` — the plugin open in the DSH right sidebar next to a session, with
   the host's APK paths redacted.
-
-Still optional:
-
-- `demo.gif` — 20–30 s recording: open panel → Environment check → VM boot → upload APK → 60 fps
-  interaction. Record on a real host and keep it under ~8 MiB.
+- `demo.gif` — 28 s loop (720×1280, 3.1 MiB): home screen → sample APK installed and driven
+  through the HTTP API → 60 fps animation in the guest. Reproducible from the guest-side
+  screencap loop in [`../DEMO.md`](../DEMO.md); `scripts/make-demo-gif.mjs` re-encodes it.
 
 The assets are not fabricated. Before adding a new screenshot, crop out or redact the DSH
 sidebar conversation names, local paths and any LAN IPs.

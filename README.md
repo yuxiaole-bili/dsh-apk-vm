@@ -45,7 +45,7 @@ same-origin, loopback-only debug HTTP API and an `apk_vm` Agent tool.
 > 当前 **Windows x64 与 Linux x86_64（headless）为端到端已验证平台**；macOS 仅做探测/CI
 > 覆盖，详见 `docs/LINUX-E2E.md`。
 
-**Status:** `0.12.0` · Apache-2.0 · no npm runtime dependencies · no build step.
+**Status:** `1.0.0` · Apache-2.0 · no npm runtime dependencies · no build step.
 
 This is an open-source DSH plugin published on npm as **`dsh-apk-vm`**. Repository:
 [github.com/yuxiaole-bili/dsh-apk-vm](https://github.com/yuxiaole-bili/dsh-apk-vm).
@@ -136,11 +136,16 @@ Real screenshots from the reference host:
 
 ![APK VM in the right sidebar](docs/screenshot-sidebar.png)
 
+28-second capture of the loop: home screen → sample APK installed and driven by the API →
+60 fps animation in the guest (720×1280, 3.2 MiB):
+
+![APK VM demo](docs/demo.gif)
+
 | Asset | Status |
 | --- | --- |
 | `docs/screenshot-panel.png` | ✅ main panel: Environment, guest H.264, controls |
 | `docs/screenshot-sidebar.png` | ✅ right-sidebar layout next to a session |
-| `docs/demo.gif` | optional — record a 20–30 s demo on a real host |
+| `docs/demo.gif` | ✅ 28 s loop (720×1280, 3.2 MiB); reproducible from the guest-side screencap loop in [DEMO.md](DEMO.md) |
 
 The [Performance](#performance) and [Verification](#verification) sections list exactly what was
 measured, on which host, and how. Real `apk_vm` output from the reference run:
@@ -222,6 +227,18 @@ key {"text":"HOME"}       -> returned to launcher
 - **Installed-app management.** The panel's **Installed apps** card lists third-party packages
   for the active instance and offers force-stop, clear-data and uninstall; it uses the same
   rooted `debug/packages` + `debug/action` API as the Agent tool.
+- **Agent activity log (图形化工作日志).** Every `apk_vm` tool call is journaled locally — action,
+  bounded argument preview, result, error, duration, instance, and an optional screenshot for
+  mutating actions. The sidebar **Agent activity** card renders it as a filterable timeline with
+  thumbnails, a full-screen overlay and 3 s auto-refresh, so you can see exactly what an Agent did
+  to the VM. See [Agent activity log](#agent-activity-log).
+- **Device resilience and recovery.** Screenshot timeouts return a structured
+  `DEVICE_UNRESPONSIVE`-style error with an actionable message instead of a bare 180 s timeout;
+  `ui_dump`/`inspect_ui` supplement WebView content with a guest-side `uiautomator dump` text
+  fallback; `shell` gains an explicit `root: true` path (`su 0`); `tap`/`text` can verify and
+  retry; network mode switches repair the guest default route; watchdog/ANR crashes are detected
+  with a recovery hint; reinstall re-grants the install/unknown-sources appop on debug VMs.
+  See [Troubleshooting](#troubleshooting) for each case.
 - **Optional [`dsh-better-sidebar`](https://github.com/omdsh-dev/DSH-better-sidebar) tab.**
   When that community plugin is installed, this plugin registers a real tab type
   (`apk-vm:preview`) through its service — no fork, no DOM hacks, and it degrades cleanly when
@@ -402,6 +419,45 @@ or `project`), session id, workspace, and `since` / `lastSeenAt` timestamps; lea
   never blocked.
 - Closing a DSH conversation (the `session/disposed` event) automatically releases its leases,
   with the 30-minute TTL as a fallback if that event is unavailable.
+
+## Multiple instances, physical devices and snapshots
+
+- **Isolated extra instances.** `POST /apk-vm/instances {"name":"agent-a","start":true}` creates a
+  dedicated AVD + emulator (+ its own H.264 stream) for another Agent conversation; lease rules
+  are in [VM ownership](#vm-ownership-and-dedicated-conversationproject-vms). Extra instances are
+  idle-stopped after `instanceIdleMs`; the AVD is kept for quick reuse.
+- **Physical / network devices.** `GET /apk-vm/devices` lists adb devices;
+  `POST /apk-vm/device {"serial":"…"}` attaches an online USB/physical/network device and
+  detaches back to the managed AVD with `{"serial":""}`. `GET/POST /apk-vm/remote` manages an
+  SSH adb tunnel (`allowRemote` / `remote` config; never a shell). The Environment card offers
+  the same attach/detach actions.
+- **Named AVD snapshots.** `GET /apk-vm/snapshots` lists snapshots;
+  `POST /apk-vm/snapshots {"action":"save|load|delete","name":"…"}` manages them. The quick-boot
+  snapshot (`snapshotName`, default `default_boot`) is handled automatically. The panel's
+  Snapshot card stores, restores and deletes snapshots and shows their footprint; they live under
+  `~/.android/avd/<avd>.avd/snapshots/`.
+
+## Agent activity log
+
+Every `apk_vm` tool call is journaled locally, so you can see what an Agent actually did to the
+VM, when, and with what result. The panel adds a sidebar **Agent activity** card that renders the
+journal as a timeline.
+
+- Storage: `<profile>/.apk-vm/activity/activity.jsonl` plus `screenshots/<id>.png`; ring-pruned
+  (1000 entries / 250 MB by default). `activityDir` overrides the location.
+- Each entry records `action`, `summary`, `ok` / `error`, `durationMs`, `instanceId`, a bounded
+  `argsPreview`, and an optional screenshot for mutating actions
+  (`tap`/`swipe`/`key`/`text`/`install`/`type_text`/…).
+- HTTP (same origin, local only):
+  `GET /apk-vm/activity?limit=&beforeId=&action=&instanceId=&ok=` (newest first + `stats`),
+  `GET /apk-vm/activity/<id>` (one entry), `GET /apk-vm/activity/<id>/shot` (PNG),
+  `POST /apk-vm/activity/clear`.
+- The card filters by instance / action / errors only, lazy-loads thumbnails, opens a full-screen
+  overlay with metadata, auto-refreshes every 3 s while open and clears with a confirmation.
+- The journal is local-only and is never uploaded, but it can contain screen content and command
+  arguments — clear it before recording or sharing the panel.
+
+A worked, dependency-free example is in [examples/agent-workflow.mjs](examples/agent-workflow.mjs): it drives state → install → UI tree → tap → assertion → screenshot and then prints the activity timeline the call just produced.
 
 ## Storage management
 
@@ -603,7 +659,9 @@ config:
   allowRemote: false               # reject non-loopback VM API clients
   autoSetup: true                  # zero-config first run: auto-provision JDK 17 + SDK + image + AVD
   # jdkRoot: 'C:/tools/dsh-jdk'   # where the auto-downloaded JDK 17 lives
+  # jdkVersion: 17                 # Temurin major version to provision (known-good table covers 17.0.21+9)
   # jdkMirror: 'https://mirrors.tuna.tsinghua.edu.cn/Adoptium'  # override the JDK mirror fallback
+  # activityDir: 'C:/tools/apk-vm-activity'  # journal + screenshot storage (default <profile>/.apk-vm/activity)
   allowSetupDownloads: false       # gate the optional manual system-image download action
   scrcpy: true
   scrcpyMaxSize: 960
@@ -649,7 +707,7 @@ All keys are optional; defaults are shown in the **Default** column.
 | `port` | `5558` | Emulator console port used when spawning. |
 | `sdkRoot` | `ANDROID_HOME` / `ANDROID_SDK_ROOT` | Android SDK root for `adb`, `aapt2`, `emulator-check`, `sdkmanager`/`avdmanager`. |
 | `adbPath` | `<sdk>/platform-tools/adb` | Explicit adb executable. |
-| `systemImage` | `system-images;android-34;default;x86_64` | System image required by the Environment card and used for AVD creation. |
+| `systemImage` | `system-images;android-34;default;x86_64` (`arm64-v8a` on arm64 hosts) | System image required by the Environment card and used for AVD creation. |
 | `spawnEmulator` | `true` | Set `false` to only attach (never spawn). |
 | `emulatorArgs` | `[]` | Extra argv appended to the emulator command line. |
 | `roots` | `[]` | Extra APK discovery roots. The DSH working directory, `process.cwd()` and the home directory are added automatically. |
@@ -672,7 +730,9 @@ All keys are optional; defaults are shown in the **Default** column.
 | `allowSetupDownloads` | `false` | Allow the Environment card's `install-image` action to run `sdkmanager --install` (large download). |
 | `autoSetup` | `true` | Provision a missing JDK 17 / SDK packages / system image / AVD automatically on first use (roughly 2.5 GB on a cold machine). Set `false` to keep setup manual. |
 | `jdkRoot` | `~/.dsh/apk-vm/jdk` | Where the auto-downloaded Temurin JDK 17 is installed. A system JDK / `JAVA_HOME` is preferred when present. |
+| `jdkVersion` | `17` | Temurin major version to provision when `autoSetup` needs a JDK. |
 | `jdkMirror` | built-in Tsinghua mirror | Mirror base URL (or array of bases) used for the Temurin JDK archive when the GitHub-hosted Adoptium download is unreachable, verified with the same SHA-256 checksum. Env: `DSH_APK_VM_JDK_MIRROR`; an empty value disables the fallback. |
+| `activityDir` | `<profile>/.apk-vm/activity` | Where the Agent activity journal (`activity.jsonl`) and its screenshots are stored. |
 | `frameFps` | `2` | PNG fallback target frame rate, 1–10 (the H.264 path is not affected). |
 | `scrcpy` | `true` | Enable the H.264/WebCodecs transport. |
 | `scrcpyMaxSize` | `960` | Encoder max size; 960 yields 540×960 video. |
@@ -722,6 +782,7 @@ and `{ action: "cancel-auto-setup" }` cancels it.
 | --- | --- | --- |
 | VM | AOSP Android Emulator (`emulator` + `system-images;android-34;default;x86_64`) | Boots the open-source Android system image; driven through adb. |
 | Setup | [lib/setup.js](lib/setup.js), [lib/jdk.js](lib/jdk.js), [lib/autosetup.js](lib/autosetup.js) | Dependency-free SDK / adb / emulator / AVD / acceleration detection plus one-click `create-avd` and optional `install-image`; `lib/jdk.js` provisions a managed Temurin JDK 17 and `lib/autosetup.js` runs the first-use auto-provisioning chain. |
+| Journal | [lib/activity-log.js](lib/activity-log.js) | Records every `apk_vm` tool call (action, argument preview, result/error, duration, instance, screenshot for mutating actions) as local JSONL + PNGs; backs the panel timeline and the `/apk-vm/activity` routes. |
 | Streaming | scrcpy 5.0.1 server (`lib/vendor/scrcpy-server-v5.0.1.jar`, pushed to `/data/local/tmp/scrcpy-server.jar`) + [lib/scrcpy.js](lib/scrcpy.js) | H.264 screen capture and the scrcpy control protocol, without the desktop scrcpy client. |
 | Device bridge | `adb` from Android SDK platform-tools | install / launch / screencap / input / logcat / file push-pull. |
 | Plugin runtime | DSH plugin APIs (`slots`, `locale`, `webServer`, `tools`, `dsh.client`) | Sidebar entry, main panel, same-origin HTTP/WebSocket control plane, agent tool. |
@@ -799,6 +860,9 @@ JSON bodies are bounded to 64 KiB; the raw APK upload is bounded to 500 MiB.
 | POST | `/apk-vm/instances` | `{"name":"agent-a","start":true}` — create an isolated AVD/VM; every extra instance has its own H.264 stream. |
 | DELETE | `/apk-vm/instances/:id` | Stop/dispose an extra instance (the default cannot be destroyed). |
 | GET/POST | `/apk-vm/instances/:id/...` | Per-instance mirror of `state`, `frame`, `vm`, `input`, `install`, `upload`, `debug/*`. |
+| GET | `/apk-vm/activity?limit=&beforeId=&action=&instanceId=&ok=` | Agent activity journal, newest first, with `stats`; `enabled: true`. |
+| GET | `/apk-vm/activity/<id>/shot` | PNG screenshot attached to one activity entry. |
+| POST | `/apk-vm/activity/clear` | Clear the activity journal and its screenshots. |
 
 Uploaded APKs are written under `<os temp>/dsh-apk-vm-uploads` and that directory is removed
 when the plugin is disposed (best-effort stale-file cleanup also runs before each upload).
@@ -1082,6 +1146,69 @@ is not expected to finish booting that way.
 - If a stale offline adb emulator is attached, `adb kill-server` (or kill the leftover
   `emulator`/`qemu-system-*` process) and retry.
 
+### `push` reports "outside the allowed roots" or "local file not found"
+
+`apk_vm push` accepts only local files under the allowed roots: the DSH workspace,
+`process.cwd()`, the home directory and the OS temp dir, plus anything you add to `roots`.
+The two failures are distinct now — *outside the allowed roots* lists the roots and how to extend
+them; *local file not found* means the path really does not exist (both used to share one
+misleading message). On Windows the comparison is case- and separator-insensitive after
+`realpath` normalization, so mixed separators in the same home directory match. If the file legitimately
+lives elsewhere, add its directory to `roots` in the plugin config, or copy it under the
+workspace / temp dir first.
+
+### `adb` or `storage` tool actions fail with a JavaScript error
+
+Fixed in 1.0.0: `adb` used to fail with `Cannot access 'api' before initialization` for every
+call (an initialization-order bug) and `storage` failed with `storageSdkRoot is not defined`.
+Both paths are covered by `spike/tool-core-test.mjs`; no configuration workaround is needed after
+updating.
+
+### A screenshot times out, the WebView UI tree is empty, or taps seem lost
+
+- A screenshot that hangs usually means the guest UI is wedged (`SurfaceFlinger`/`system_server`
+  stopped producing frames). The tool now returns a structured error (`DEVICE_UNRESPONSIVE` /
+  `SCREENSHOT_TIMEOUT`) with a recovery hint instead of an opaque timeout, and the optional
+  auto-recovery path (adb reconnect, then at most one emulator reboot with a cooldown) is used
+  when enabled. A quick manual recovery is `apk_vm reboot`, or stop/start the VM in the panel.
+- `ui_dump` / `inspect_ui` on a WebView can return very few nodes with no visible text. The tool
+  now supplements the tree with a guest-side `uiautomator dump` text pass, so card titles and
+  button labels inside WebViews still show up (the original UIAutomator JSON shape is
+  unchanged).
+- A `tap` inside a WebView that appears to do nothing may have been injected but ignored by the
+  page. `tap` can verify the frame changed and retry once with a small offset; when the screen is
+  byte-identical before and after, the result reports `changed: false` so you can distinguish a
+  lost injection from a page that is genuinely stuck.
+- `shell` runs as the `shell` user (`uid 2000`) even though the VM is rooted. Use the explicit
+  root path (`shell` with `root: true`, i.e. `su 0 sh -c …`) for `/data/data` reads and
+  `shared_prefs` writes; writing app-private files also needs the app's SELinux category
+  (`u:object_r:app_data_file:s0:c<…>`) because `toybox chcon` has no `--reference`.
+- Chinese `text` injection can succeed on the input channel but not reach a WebView field; the
+  text path now verifies the field and falls back to a clipboard/`input text` style delivery,
+  reporting which method worked.
+
+### The guest loses its network after switching to shared mode
+
+Switching an instance to `shared` can leave the guest with a link-scope route but no default
+gateway, and a reboot clears it again. The plugin now detects and repairs the default route
+(`ip route add default via <emulator host alias>`) when the mode becomes shared, and the network
+status reports `ENETUNREACH` explicitly. If a repair still fails, reboot the VM once — the route
+is restored by the normal environment restore.
+
+### The VM stops responding after a watchdog / ANR crash
+
+A `system_server` watchdog crash (`DeadSystemException`, `WAITED_HALF`) can kill the foreground
+app, drop focus to `FallbackHome` and make screenshots fail. The plugin now probes a few cheap
+health signals and reports a structured `unresponsive` status with the ANR trace location
+(`/data/anr`) and a recovery action; stop/start (or `apk_vm reboot`) restores the VM.
+
+### "Install unknown apps" is reset after reinstalling an APK
+
+Android clears the per-package `REQUEST_INSTALL_PACKAGES` appop when a package is reinstalled, so
+an auto-update test can fail right after `install`. On debug/local VMs the plugin snapshots and
+re-grants the previously allowed appops after install (configurable); otherwise re-open the
+settings toggle for that package.
+
 ### APK upload fails
 
 - The upload endpoint accepts raw `.apk`/ZIP bytes up to **500 MiB**; larger files return `413`
@@ -1167,6 +1294,10 @@ before pointing the DSH Web UI at an untrusted network.
   services; network activity is limited to `autoSetup` provisioning (Temurin JDK from
   `api.adoptium.net` or its mirror, then the SDK packages/image through the user's own
   `sdkmanager`, which contacts Google's SDK repository) and the same-origin DSH Web server.
+- **The Agent activity log is local-only.** Tool-call journal entries and screenshots are written
+  under `<profile>/.apk-vm/activity` on this host and are never sent anywhere. They can contain
+  screen content and command arguments, so clear the journal before sharing a recording of the
+  panel (the card has a confirmed **Clear** action, or `POST /apk-vm/activity/clear`).
 
 To report a vulnerability, follow [SECURITY.md](SECURITY.md) — please use private disclosure,
 not a public issue.
@@ -1178,13 +1309,11 @@ not a public issue.
 The features below are **not shipped yet** — they are tracked for future releases. Everything
 described above is implemented in this release.
 
-- **Physical-device switching** — first-class selection/attachment of adb-attached physical
-  devices from the panel (config `serial` already supports attaching one; multi-AVD switching is
-  shipped via `/apk-vm/avds` + `/apk-vm/avd` and the Environment card).
+- **Physical-device attach is available but not exhaustively verified.** `/apk-vm/devices` +
+  `/apk-vm/device` and the SSH adb tunnel are shipped; per-device quirks (OEM adb authorization,
+  screen size/orientation, root availability) still need a device-specific smoke test.
 - **Audio streaming** — forward guest audio alongside the video stream.
 - **Cloud / remote VM execution** — run the guest on a remote host and stream it to the panel.
-- **Static APK preview** *(optional)* — inspect an APK's manifest, resources and launcher UI
-  without booting a full VM.
 
 QEMU + Android-x86 for hosts without hardware virtualization and `-writable-system` image
 customization remain research notes in [DESIGN.md](DESIGN.md) §8.
@@ -1194,8 +1323,9 @@ customization remain research notes in [DESIGN.md](DESIGN.md) §8.
 ## Known limitations
 
 - **Windows x64 and Linux x86_64 are the end-to-end verified platforms.** macOS SDK/adb/
-  emulator/AVD discovery and headless checks are implemented, but emulator + H.264 behavior on
-  macOS (and `arm64-v8a` images on Apple Silicon) is unverified.
+  emulator/AVD discovery is implemented and `arm64` hosts automatically select the
+  `arm64-v8a` system image, but emulator + H.264 behavior on macOS/Apple Silicon is still
+  unverified end-to-end.
 - **Hardware virtualization is mandatory** for the x86_64 AOSP image; pure TCG fails by design.
 - **Quick boot is snapshot-based.** Changing AVD configuration invalidates the snapshot; recreate
   it as described in [Troubleshooting](#quick-boot-fails-different-avd-configuration-black-screen-or-no-snapshot).
@@ -1203,8 +1333,10 @@ customization remain research notes in [DESIGN.md](DESIGN.md) §8.
   transport limitation.
 - **The rooted debug API is local-only by design.** Do not expose the DSH Web port to untrusted
   networks.
-- **No audio and no physical-device switching yet** (multi-AVD switching is available; see
-  [Roadmap](#roadmap)).
+- **The activity journal records `apk_vm` tool calls** (the path Agents normally use). Direct HTTP
+  calls to `/apk-vm/*` from a script are not journaled; the journal is capped at 1000 entries /
+  250 MB by default (`activityDir` changes the location; the caps are not configurable yet).
+- **No audio yet** (see [Roadmap](#roadmap)).
 
 ---
 

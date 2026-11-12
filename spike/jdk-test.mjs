@@ -13,9 +13,12 @@
  * fresh install with checksum verification, retry-friendly archive reuse,
  * checksum mismatch, download failure, invalid API payloads, unsupported
  * platform/architecture, the China-mirror fallback (`jdkMirror` option,
- * `DSH_APK_VM_JDK_MIRROR` env, primary→mirror retry semantics), setup.js
- * integration (`javaHome`/`javaPresent` report fields, `jdkRoot`/
- * `extraJavaHomes` pass-through) and JSON-safe results.
+ * `DSH_APK_VM_JDK_MIRROR` env, primary→mirror retry semantics), the bundled
+ * known-good table used when the Adoptium API is blocked, `jdkVersion`
+ * pinning/mismatch handling, resumable partial downloads (the partial archive
+ * is kept and the retry continues with `Range`), setup.js integration
+ * (`javaHome`/`javaPresent` report fields, `jdkRoot`/`extraJavaHomes`
+ * pass-through) and JSON-safe results.
  *
  *   cd apk-vm-preview
  *   node spike/jdk-test.mjs
@@ -31,7 +34,14 @@ import { promises as fsp } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-import { adoptiumAssetUrl, defaultJdkRoot, ensureJdk, findManagedJdk } from '../lib/jdk.js';
+import {
+  KNOWN_GOOD_JDK_RELEASES,
+  adoptiumAssetUrl,
+  defaultJdkRoot,
+  ensureJdk,
+  findManagedJdk,
+  knownGoodJdkAsset,
+} from '../lib/jdk.js';
 import { bootstrapSdk, detectEnvironment, setupReport } from '../lib/setup.js';
 
 const PLATFORM = process.platform;
@@ -142,6 +152,26 @@ function makeExtract(version, calls) {
     await fsp.writeFile(path.join(destination, `jdk-${version}`, 'bin', JAVA_BIN), '', 'utf8');
     calls.push({ archive, destination, platform: opts.platform });
     return { ok: true };
+  };
+}
+
+/**
+ * Build an injectable `knownGoodReleases` table for the host OS with one x64
+ * asset, so known-good fallback tests never touch the real bundled table.
+ */
+function fakeKnownGoodTable(assetName, bytes, overrides = {}) {
+  return {
+    17: {
+      release: overrides.release || 'jdk-17.0.21+9',
+      version: overrides.version || '17.0.21+9',
+      assets: {
+        [`${OS_SEGMENT}-x64`]: {
+          name: assetName,
+          size: bytes.length,
+          sha256: overrides.sha256 || createHash('sha256').update(bytes).digest('hex'),
+        },
+      },
+    },
   };
 }
 
@@ -330,6 +360,8 @@ await test('ensureJdk returns an existing managed JDK without touching the netwo
   assert.equal(result.javaHome, path.resolve(javaHome));
   assert.equal(result.version, '17.0.9+9');
   assert.equal(result.url, null);
+  assert.equal(result.source, null, 'a cached JDK has no download source');
+  assert.equal(result.jdkVersion, 17);
   assertJsonSafe(result);
 });
 
@@ -371,6 +403,8 @@ await test('ensureJdk installs a fake Temurin archive and reuses it on the secon
   assert.equal(result.url, payload[0].binary.package.link);
   assert.equal(result.bytes, archiveBytes.length);
   assert.equal(result.sha256, expectedSha, 'installed result must expose the verified SHA-256');
+  assert.equal(result.source, 'api', 'an API-resolved install reports source api');
+  assert.equal(result.jdkVersion, 17);
   assert.ok(existsSync(path.join(result.javaHome, 'bin', JAVA_BIN)), 'bin/java must exist after install');
   assertJsonSafe(result);
 
@@ -383,6 +417,8 @@ await test('ensureJdk installs a fake Temurin archive and reuses it on the secon
   assert.equal(downloadCalls.length, 1);
   assert.equal(downloadCalls[0].url, result.url);
   assert.equal(downloadCalls[0].destination, path.join(jdkRoot, 'downloads', assetName));
+  assert.equal(downloadCalls[0].opts.resume, true, 'downloads must be resumable');
+  assert.equal(downloadCalls[0].opts.expectedSize, archiveBytes.length);
   assert.equal(extractCalls.length, 1);
   assert.ok(progress.length > 0, 'onProgress must be called');
   assert.ok(progress.some((event) => event.step === 'done'), 'progress must reach the done step');
@@ -513,32 +549,502 @@ await test('ensureJdk reports a checksum mismatch as ok:false and deletes the ar
   assertJsonSafe(result);
 });
 
-await test('ensureJdk reports an invalid Adoptium payload or API failure as ok:false', async (root) => {
+// ---------------------------------------------------------------------------
+// Case 6c: bundled known-good fallback when the Adoptium API is unreachable
+// ---------------------------------------------------------------------------
+
+const KNOWN_GOOD_ENTRY = KNOWN_GOOD_JDK_RELEASES[17];
+const KNOWN_GOOD_KEY = `${OS_SEGMENT}-x64`;
+const KNOWN_GOOD_PACKAGE = KNOWN_GOOD_ENTRY.assets[KNOWN_GOOD_KEY];
+const KNOWN_GOOD_PRIMARY =
+  'https://github.com/adoptium/temurin17-binaries/releases/download/' +
+  `${encodeURIComponent(KNOWN_GOOD_ENTRY.release)}/${KNOWN_GOOD_PACKAGE.name}`;
+const TUNA_BASE = 'https://mirrors.tuna.tsinghua.edu.cn/Adoptium';
+
+await test('the bundled known-good table matches the published Temurin 17.0.21+9 assets', async () => {
+  assert.equal(KNOWN_GOOD_ENTRY.release, 'jdk-17.0.21+9');
+  assert.equal(KNOWN_GOOD_ENTRY.version, '17.0.21+9');
+  assert.deepEqual(Object.keys(KNOWN_GOOD_ENTRY.assets).sort(), [
+    'linux-aarch64',
+    'linux-x64',
+    'mac-aarch64',
+    'mac-x64',
+    'windows-x64',
+  ]);
+  const windows = KNOWN_GOOD_ENTRY.assets['windows-x64'];
+  assert.equal(windows.name, 'OpenJDK17U-jdk_x64_windows_hotspot_17.0.21_9.zip');
+  assert.equal(windows.size, 191117380);
+  assert.equal(windows.sha256, '98518ecf554465057ee5509462631deeee374bc368c12a411d225cd29381f84b');
+  for (const [key, pkg] of Object.entries(KNOWN_GOOD_ENTRY.assets)) {
+    assert.match(pkg.sha256, /^[0-9a-f]{64}$/, `${key}: sha256 must be lowercase hex`);
+    assert.ok(pkg.size > 100 * 1024 * 1024, `${key}: expected a >100MB archive`);
+  }
+
+  const asset = knownGoodJdkAsset(17, 'windows', 'x64');
+  assert.equal(asset.ok, true);
+  assert.equal(asset.source, 'known-good');
+  assert.equal(asset.name, windows.name);
+  assert.equal(asset.size, windows.size);
+  assert.equal(asset.checksum, windows.sha256);
+  assert.equal(asset.version, '17.0.21+9');
+  assert.equal(
+    asset.link,
+    `https://github.com/adoptium/temurin17-binaries/releases/download/` +
+      `${encodeURIComponent('jdk-17.0.21+9')}/OpenJDK17U-jdk_x64_windows_hotspot_17.0.21_9.zip`,
+  );
+
+  const missingPlatform = knownGoodJdkAsset(17, 'windows', 'aarch64');
+  assert.equal(missingPlatform.ok, false);
+  assert.match(
+    missingPlatform.error,
+    /no known-good Eclipse Temurin 17 package is bundled for windows-aarch64/,
+  );
+  const missingRelease = knownGoodJdkAsset(21, 'linux', 'x64');
+  assert.equal(missingRelease.ok, false);
+  assert.match(missingRelease.error, /no known-good Eclipse Temurin 21 release/);
+  const invalidEntry = knownGoodJdkAsset(17, 'linux', 'x64', {
+    17: {
+      release: 'jdk-17',
+      assets: { 'linux-x64': { name: 'x.zip', size: 0, sha256: 'nope' } },
+    },
+  });
+  assert.equal(invalidEntry.ok, false);
+  assert.match(invalidEntry.error, /invalid/);
+});
+
+await test('ensureJdk falls back to the known-good table when the Adoptium API fails', async (root) => {
   const cases = [
-    ['empty payload', async () => fakeResponse([]), /Adoptium API/i],
-    ['missing binary.package', async () => fakeResponse([{ binary: {} }]), /Adoptium API/i],
+    ['empty payload', async () => fakeResponse([])],
+    ['missing binary.package', async () => fakeResponse([{ binary: {} }])],
     [
       'non-https link',
       async () =>
         fakeResponse(
           fakePayload(Buffer.from('x'), 'fake.zip', { link: 'http://insecure.test/fake.zip' }),
         ),
-      /Adoptium API/i,
     ],
     [
       'fetch throws',
       async () => {
         throw new Error('getaddrinfo ENOTFOUND api.adoptium.net');
       },
-      /Adoptium API request failed/,
     ],
   ];
-  for (const [label, fetchImpl, pattern] of cases) {
-    const result = await ensureJdk({ jdkRoot: path.join(root, 'managed'), platform: PLATFORM, fetchImpl });
+  for (const [label, fetchImpl] of cases) {
+    const requested = [];
+    const result = await ensureJdk({
+      jdkRoot: path.join(root, `managed-${label.replace(/\W+/g, '-')}`),
+      platform: PLATFORM,
+      arch: 'x64',
+      fetchImpl,
+      download: async (url) => {
+        requested.push(url);
+        return { ok: false, error: 'known-good source unreachable' };
+      },
+    });
     assert.equal(result.ok, false, `${label}: expected ok:false`);
-    assert.match(result.error, pattern, `${label}: unexpected error: ${result.error}`);
+    assert.match(result.error, /Adoptium API/i, `${label}: API error must be surfaced: ${result.error}`);
+    assert.match(result.error, /JDK download failed from all 2 source\(s\)/);
+    assert.match(result.error, /known-good source unreachable/);
+    assert.match(result.error, /jdkMirror/);
+    assert.equal(result.jdkVersion, 17);
+    assert.equal(requested.length, 2);
+    assert.equal(requested[0], KNOWN_GOOD_PRIMARY, `${label}: primary known-good URL`);
+    assert.equal(
+      requested[1],
+      mirrorUrl(TUNA_BASE, KNOWN_GOOD_PACKAGE.name),
+      `${label}: default TUNA mirror URL`,
+    );
     assertJsonSafe(result);
   }
+});
+
+await test('ensureJdk installs the known-good asset from a mirror when the API and GitHub are blocked', async (root) => {
+  const bytes = Buffer.from('known-good temurin archive bytes', 'utf8');
+  const assetName = 'OpenJDK17U-jdk_x64_known_good_17.0.21_9.zip';
+  const table = fakeKnownGoodTable(assetName, bytes);
+  const expectedPrimary =
+    'https://github.com/adoptium/temurin17-binaries/releases/download/' +
+    `${encodeURIComponent('jdk-17.0.21+9')}/${assetName}`;
+  const base = 'https://mirror.example.test/Adoptium';
+  const expectedMirror = mirrorUrl(base, assetName);
+  const requested = [];
+  const progress = [];
+
+  const result = await ensureJdk({
+    jdkRoot: path.join(root, 'managed'),
+    platform: PLATFORM,
+    arch: 'x64',
+    jdkMirror: base,
+    fetchImpl: async () => {
+      throw new Error('api.adoptium.net blocked');
+    },
+    knownGoodReleases: table,
+    download: async (url, destination, opts = {}) => {
+      requested.push(url);
+      if (url === expectedPrimary) return { ok: false, error: 'github.com blocked' };
+      assert.equal(url, expectedMirror);
+      return makeDownload(bytes, [])(url, destination, opts);
+    },
+    extract: makeExtract('17.0.21+9', []),
+    onProgress: (event) => progress.push(event),
+  });
+
+  assert.equal(result.ok, true, result.error);
+  assert.equal(result.source, 'known-good');
+  assert.equal(result.cached, false);
+  assert.equal(result.jdkVersion, 17);
+  assert.equal(result.url, expectedMirror);
+  assert.equal(result.viaMirror, true);
+  assert.deepEqual(requested, [expectedPrimary, expectedMirror]);
+  assert.equal(result.sha256, createHash('sha256').update(bytes).digest('hex'));
+  assert.ok(existsSync(path.join(result.javaHome, 'bin', JAVA_BIN)));
+  assert.ok(
+    progress.some((event) => /known-good/i.test(event.message || '')),
+    'progress must name the known-good fallback',
+  );
+  assertJsonSafe(result);
+});
+
+await test('ensureJdk probes non-final sources and skips a blackholed primary quickly', async (root) => {
+  const bytes = Buffer.from('probe test archive bytes', 'utf8');
+  const assetName = 'OpenJDK17U-jdk_x64_probe_17.0.21_9.zip';
+  const primary =
+    'https://github.com/adoptium/temurin17-binaries/releases/download/' +
+    `${encodeURIComponent('jdk-17.0.21+9')}/${assetName}`;
+  const base = 'https://mirror.example.test/Adoptium';
+  const expectedMirror = mirrorUrl(base, assetName);
+  const payload = fakePayload(bytes, assetName, { link: primary });
+  const probes = [];
+  const downloads = [];
+
+  const result = await ensureJdk({
+    jdkRoot: path.join(root, 'managed'),
+    platform: PLATFORM,
+    arch: 'x64',
+    jdkMirror: base,
+    fetchImpl: async () => fakeResponse(payload),
+    probe: async (url, opts = {}) => {
+      probes.push({ url, timeoutMs: opts.timeoutMs });
+      if (url === primary) return { ok: false, error: 'no response within 8000 ms' };
+      return { ok: true, status: 200 };
+    },
+    probeTimeoutMs: 1234,
+    download: makeDownload(bytes, downloads),
+    extract: makeExtract('17.0.21+9', []),
+  });
+
+  assert.equal(result.ok, true, result.error);
+  assert.equal(result.viaMirror, true);
+  assert.equal(result.url, expectedMirror);
+  assert.deepEqual(
+    downloads.map((call) => call.url),
+    [expectedMirror],
+    'a blackholed primary must be skipped without starting its download',
+  );
+  assert.equal(probes.length, 1, 'only non-final sources are probed');
+  assert.equal(probes[0].url, primary);
+  assert.equal(probes[0].timeoutMs, 1234, 'probeTimeoutMs must reach the probe');
+  assert.equal(result.sha256, createHash('sha256').update(bytes).digest('hex'));
+  assert.ok(existsSync(path.join(result.javaHome, 'bin', JAVA_BIN)));
+  assertJsonSafe(result);
+});
+
+await test('ensureJdk caps non-final source timeouts and keeps the full budget for the last source', async (root) => {
+  const bytes = Buffer.from('timeout cap archive bytes', 'utf8');
+  const assetName = 'OpenJDK17U-jdk_x64_cap_17.0.21_9.zip';
+  const primary =
+    'https://github.com/adoptium/temurin17-binaries/releases/download/' +
+    `${encodeURIComponent('jdk-17.0.21+9')}/${assetName}`;
+  const base = 'https://mirror.example.test/Adoptium';
+  const expectedMirror = mirrorUrl(base, assetName);
+  const payload = fakePayload(bytes, assetName, { link: primary });
+  const downloads = [];
+
+  const result = await ensureJdk({
+    jdkRoot: path.join(root, 'managed'),
+    platform: PLATFORM,
+    arch: 'x64',
+    jdkMirror: base,
+    fetchImpl: async () => fakeResponse(payload),
+    probe: async () => ({ ok: true, status: 200 }),
+    timeoutMs: 9000,
+    candidateTimeoutMs: 4000,
+    download: async (url, destination, opts = {}) => {
+      downloads.push({ url, timeoutMs: opts.timeoutMs });
+      if (url === primary) return { ok: false, error: 'primary hung after the capped budget' };
+      return makeDownload(bytes, [])(url, destination, opts);
+    },
+    extract: makeExtract('17.0.21+9', []),
+  });
+
+  assert.equal(result.ok, true, result.error);
+  assert.equal(result.url, expectedMirror);
+  assert.deepEqual(
+    downloads.map((call) => call.url),
+    [primary, expectedMirror],
+  );
+  assert.equal(downloads[0].timeoutMs, 4000, 'non-final sources use the candidate cap');
+  assert.equal(downloads[1].timeoutMs, 9000, 'the final source keeps the full download budget');
+  assertJsonSafe(result);
+});
+
+await test('ensureJdk times out a hanging Adoptium API lookup and falls back to the known-good table', async (root) => {
+  const bytes = Buffer.from('api timeout archive bytes', 'utf8');
+  const assetName = 'OpenJDK17U-jdk_x64_apitimeout_17.0.21_9.zip';
+  const table = fakeKnownGoodTable(assetName, bytes);
+  const base = 'https://mirror.example.test/Adoptium';
+  const downloads = [];
+  const progress = [];
+  const fetchCalls = [];
+
+  const result = await ensureJdk({
+    jdkRoot: path.join(root, 'managed'),
+    platform: PLATFORM,
+    arch: 'x64',
+    jdkMirror: base,
+    apiTimeoutMs: 100,
+    fetchImpl: (url, init = {}) => {
+      fetchCalls.push(url);
+      return new Promise((resolve, reject) => {
+        if (init.signal) {
+          init.signal.addEventListener('abort', () => reject(new Error('aborted by test timer')));
+        }
+      });
+    },
+    knownGoodReleases: table,
+    download: makeDownload(bytes, downloads),
+    extract: makeExtract('17.0.21+9', []),
+    onProgress: (event) => progress.push(event),
+  });
+
+  assert.equal(result.ok, true, result.error);
+  assert.equal(result.source, 'known-good');
+  assert.equal(result.jdkVersion, 17);
+  assert.equal(fetchCalls.length, 1);
+  assert.ok(
+    progress.some((event) => /Adoptium API unavailable/i.test(event.message || '')),
+    'the API timeout must be reported as the known-good fallback reason',
+  );
+  assert.ok(
+    progress.some((event) => /known-good/i.test(event.message || '')),
+    'progress must name the known-good fallback',
+  );
+  assert.ok(existsSync(path.join(result.javaHome, 'bin', JAVA_BIN)));
+  assertJsonSafe(result);
+});
+
+await test('ensureJdk verifies the known-good sha256 and deletes a tampered archive', async (root) => {
+  const bytes = Buffer.from('known-good temurin archive bytes', 'utf8');
+  const assetName = 'OpenJDK17U-jdk_x64_known_good_17.0.21_9.zip';
+  const table = fakeKnownGoodTable(assetName, bytes);
+  const jdkRoot = path.join(root, 'managed');
+  const tampered = Buffer.from(bytes);
+  tampered[0] ^= 0xff;
+  const base = 'https://mirror.example.test/Adoptium';
+
+  const result = await ensureJdk({
+    jdkRoot,
+    platform: PLATFORM,
+    arch: 'x64',
+    jdkMirror: base,
+    fetchImpl: async () => {
+      throw new Error('api.adoptium.net blocked');
+    },
+    knownGoodReleases: table,
+    // Both the GitHub link and the mirror deliver tampered bytes.
+    download: makeDownload(tampered, []),
+  });
+
+  assert.equal(result.ok, false);
+  assert.match(result.error, /checksum mismatch/i);
+  assert.match(result.error, /JDK download failed from all 2 source/);
+  assert.equal(result.jdkVersion, 17);
+  assert.ok(!existsSync(path.join(jdkRoot, 'downloads', assetName)), 'a tampered archive must be deleted');
+  assert.ok(!existsSync(path.join(jdkRoot, 'jdk-17')), 'nothing may be installed');
+  assertJsonSafe(result);
+});
+
+await test('ensureJdk reports the API error and the missing known-good package when nothing resolves', async (root) => {
+  const result = await ensureJdk({
+    jdkRoot: path.join(root, 'managed'),
+    platform: PLATFORM,
+    arch: 'x64',
+    fetchImpl: async () => {
+      throw new Error('api.adoptium.net blocked');
+    },
+    knownGoodReleases: { 17: { release: 'jdk-17.0.21+9', version: '17.0.21+9', assets: {} } },
+  });
+  assert.equal(result.ok, false);
+  assert.match(result.error, /Adoptium API request failed/);
+  assert.match(result.error, /no known-good Eclipse Temurin 17 package is bundled for/);
+  assert.match(result.error, /Temurin mirror/);
+  assertJsonSafe(result);
+});
+
+// ---------------------------------------------------------------------------
+// Case 6d: jdkVersion pinning
+// ---------------------------------------------------------------------------
+
+await test('ensureJdk can pin a different Temurin major version (jdkVersion)', async (root) => {
+  const jdkRoot = path.join(root, 'managed');
+  const bytes = Buffer.from('temurin 21 archive bytes', 'utf8');
+  const assetName = 'OpenJDK21U-jdk_x64_fake_21.0.1_12.zip';
+  const payload = fakePayload(bytes, assetName);
+  const fetchCalls = [];
+  const result = await ensureJdk({
+    jdkRoot,
+    platform: PLATFORM,
+    arch: 'x64',
+    jdkVersion: 21,
+    fetchImpl: async (url) => {
+      fetchCalls.push(url);
+      return fakeResponse(payload);
+    },
+    download: makeDownload(bytes, []),
+    extract: makeExtract('21.0.1+12', []),
+  });
+  assert.equal(result.ok, true, result.error);
+  assert.equal(result.jdkVersion, 21);
+  assert.equal(result.source, 'api');
+  assert.equal(result.version, '21.0.1+12');
+  assert.equal(fetchCalls[0], adoptiumAssetUrl(ADOPTIUM_OS[PLATFORM], 'x64', 21));
+  assert.equal(result.javaHome, path.resolve(path.join(jdkRoot, 'jdk-21.0.1+12')));
+  assertJsonSafe(result);
+});
+
+await test('ensureJdk replaces a cached JDK that does not match the pinned jdkVersion', async (root) => {
+  const jdkRoot = path.join(root, 'managed');
+  await writeJavaHome(path.join(jdkRoot, 'jdk-17.0.9+9'));
+  const bytes = Buffer.from('pinned 21 archive bytes', 'utf8');
+  const payload = fakePayload(bytes, 'OpenJDK21U-jdk_x64_fake_21.0.1_12.zip');
+  const fetchCalls = [];
+  const logs = [];
+
+  const result = await ensureJdk({
+    jdkRoot,
+    platform: PLATFORM,
+    arch: 'x64',
+    jdkVersion: 21,
+    fetchImpl: async (url) => {
+      fetchCalls.push(url);
+      return fakeResponse(payload);
+    },
+    download: makeDownload(bytes, []),
+    extract: makeExtract('21.0.1+12', []),
+    log: (line) => logs.push(line),
+  });
+  assert.equal(result.ok, true, result.error);
+  assert.equal(result.cached, false, 'a mismatched cached JDK must be bypassed');
+  assert.equal(result.jdkVersion, 21);
+  assert.equal(result.version, '21.0.1+12');
+  assert.equal(fetchCalls.length, 1);
+  assert.equal(fetchCalls[0], adoptiumAssetUrl(ADOPTIUM_OS[PLATFORM], 'x64', 21));
+  assert.ok(logs.some((line) => /pinned Temurin 21/.test(line)), `missing pin notice in logs: ${logs.join(' | ')}`);
+
+  const matching = await ensureJdk({
+    jdkRoot,
+    platform: PLATFORM,
+    jdkVersion: 21,
+    fetchImpl: () => {
+      throw new Error('must not fetch once the pinned JDK is installed');
+    },
+  });
+  assert.equal(matching.ok, true, matching.error);
+  assert.equal(matching.cached, true);
+  assert.equal(matching.jdkVersion, 21);
+});
+
+await test('ensureJdk rejects invalid jdkVersion values', async (root) => {
+  for (const value of ['abc', 7, 100, 1.5]) {
+    const result = await ensureJdk({
+      jdkRoot: path.join(root, 'managed'),
+      platform: PLATFORM,
+      jdkVersion: value,
+    });
+    assert.equal(result.ok, false, `jdkVersion=${JSON.stringify(value)} must be rejected`);
+    assert.match(result.error, /jdkVersion must be an integer between 8 and 99/);
+    assertJsonSafe(result);
+  }
+});
+
+await test('ensureJdk verifies the installed major version against a pinned jdkVersion', async (root) => {
+  const bytes = Buffer.from('wrong-major archive bytes', 'utf8');
+  const payload = fakePayload(bytes, 'OpenJDK17U-jdk_x64_fake_17.0.9_9.zip');
+  const result = await ensureJdk({
+    jdkRoot: path.join(root, 'managed'),
+    platform: PLATFORM,
+    arch: 'x64',
+    jdkVersion: 21,
+    fetchImpl: async () => fakeResponse(payload),
+    download: makeDownload(bytes, []),
+    extract: makeExtract('17.0.9+9', []),
+  });
+  assert.equal(result.ok, false);
+  assert.match(result.error, /installed JDK version mismatch: expected Temurin 21, found 17\.0\.9\+9/);
+  assert.equal(result.jdkVersion, 21);
+  assertJsonSafe(result);
+});
+
+// ---------------------------------------------------------------------------
+// Case 6e: resumable partial downloads
+// ---------------------------------------------------------------------------
+
+await test('ensureJdk keeps a partial download and resumes it on retry', async (root) => {
+  const jdkRoot = path.join(root, 'managed');
+  const bytes = Buffer.from('0123456789abcdefghijklmnopqrstuvwxyz-partial-resume-payload-1234567890', 'utf8');
+  const assetName = 'OpenJDK17U-jdk_x64_partial_17.0.9_9.zip';
+  const payload = fakePayload(bytes, assetName);
+  const archivePath = path.join(jdkRoot, 'downloads', assetName);
+  const progress = [];
+
+  const first = await ensureJdk({
+    jdkRoot,
+    platform: PLATFORM,
+    arch: 'x64',
+    jdkMirror: [],
+    fetchImpl: async () => fakeResponse(payload),
+    download: async (url, destination, opts = {}) => {
+      assert.equal(opts.resume, true, 'the downloader must be told to resume');
+      assert.equal(opts.expectedSize, bytes.length);
+      await fsp.mkdir(path.dirname(destination), { recursive: true });
+      await fsp.writeFile(destination, bytes.subarray(0, 20));
+      return { ok: false, error: 'connection reset by peer' };
+    },
+    onProgress: (event) => progress.push(event),
+  });
+  assert.equal(first.ok, false);
+  assert.match(first.error, /connection reset by peer/);
+  assert.match(first.error, /retrying is safe and resumes the download/);
+  assert.match(first.error, /partial archive was kept/);
+  assert.ok(existsSync(archivePath), 'the partial archive must be kept for the retry');
+  assert.equal((await fsp.stat(archivePath)).size, 20);
+
+  const second = await ensureJdk({
+    jdkRoot,
+    platform: PLATFORM,
+    arch: 'x64',
+    jdkMirror: [],
+    fetchImpl: async () => fakeResponse(payload),
+    download: async (url, destination, opts = {}) => {
+      assert.equal(opts.resume, true);
+      assert.equal(opts.expectedSize, bytes.length);
+      await fsp.mkdir(path.dirname(destination), { recursive: true });
+      await fsp.writeFile(destination, bytes);
+      return { ok: true, bytes: bytes.length };
+    },
+    extract: makeExtract('17.0.9+9', []),
+    onProgress: (event) => progress.push(event),
+  });
+  assert.equal(second.ok, true, second.error);
+  assert.equal(second.cached, false);
+  assert.equal((await fsp.stat(archivePath)).size, bytes.length);
+  assert.equal(second.sha256, createHash('sha256').update(bytes).digest('hex'));
+  assert.ok(
+    progress.some((event) => /resuming at 20 bytes/.test(event.message || '')),
+    'progress must report the resume offset',
+  );
+  assertJsonSafe(second);
 });
 
 await test('ensureJdk rejects unsupported platforms and architectures instead of guessing', async (root) => {
@@ -953,6 +1459,9 @@ await test('success and failure results are JSON-safe', async (root) => {
     jdkRoot: path.join(root, 'managed-3'),
     platform: PLATFORM,
     fetchImpl: async () => fakeResponse([]),
+    // The API failure now falls back to the known-good table; keep the
+    // downloader offline so this case never touches the network.
+    download: async () => ({ ok: false, error: 'offline test: no network' }),
   });
   assertJsonSafe(failed);
 });
@@ -983,6 +1492,8 @@ if (process.env.DSH_APK_VM_JDK_E2E === '1') {
     assert.ok(existsSync(path.join(result.javaHome, 'bin', JAVA_BIN)), 'real JDK bin/java must exist');
     assert.match(result.sha256 || '', /^[0-9a-f]{64}$/);
     assert.equal(typeof result.viaMirror, 'boolean');
+    assert.ok(result.source === 'api' || result.source === 'known-good', `unexpected source: ${result.source}`);
+    assert.equal(result.jdkVersion, 17);
     assert.ok((result.bytes || 0) > 10 * 1024 * 1024, `archive too small: ${result.bytes} bytes`);
 
     const version = await runJavaVersion(result.javaHome);
