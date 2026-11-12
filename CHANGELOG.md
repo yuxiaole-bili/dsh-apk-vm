@@ -1,5 +1,50 @@
 # Changelog
 
+## 0.12.0
+
+Zero-config first run: the plugin now provisions its own JDK, Android SDK, system image and AVD.
+
+### Added
+
+- **Automatic environment provisioning (`autoSetup`, default `true`).** The first
+  `GET /apk-vm/state` or `GET /apk-vm/setup` request — opening the panel, or an Agent's first
+  `apk_vm` call — starts a background chain when the environment is incomplete: download a
+  portable **Temurin JDK 17** from Adoptium (SHA-256-verified), bootstrap the Android SDK
+  command-line tools and accept licenses, install `platform-tools`/`emulator`/`build-tools`/
+  `platforms`, install the configured system image, and create the AVD. The existing
+  `autoStart` flow then boots the VM. A cold machine downloads roughly 2.5 GB; set
+  `autoSetup: false` to keep setup manual.
+- New `lib/jdk.js`: `findManagedJdk()` / `ensureJdk()` — Temurin 17 download with checksum
+  verification, retry-friendly archive reuse, cross-platform extraction, and a managed JDK root
+  (`~/.dsh/apk-vm/jdk`, override with `jdkRoot`).
+- JDK download mirror fallback: when the GitHub-hosted Adoptium asset is unreachable (common on
+  mainland-China networks), the archive is fetched from the built-in Tsinghua mirror — or the
+  `jdkMirror` config / `DSH_APK_VM_JDK_MIRROR` env override — and still verified against
+  Adoptium's published SHA-256 checksum.
+- New `lib/autosetup.js`: single-flight orchestrator with per-step progress, cancel and retry;
+  exposed as `autoSetup` on `GET /apk-vm/setup`, `POST /apk-vm/setup`
+  (`action: auto-setup` / `cancel-auto-setup`), `/apk-vm/state` and the `apk_vm` `info` result.
+- `GET /apk-vm/setup` now reports `javaHome` / `javaPresent`; the Environment card shows a Java
+  row plus live auto-setup progress with cancel/retry.
+
+### Changed
+
+- `findJavaHome()` also looks in the plugin-managed JDK directory and `extraJavaHomes`, so
+  `sdkmanager`/`avdmanager` work without a system-wide JDK or `JAVA_HOME`.
+- When provisioning finishes, the VM and the instance manager adopt the freshly detected SDK,
+  emulator and AVD paths (without overriding explicit config), then boot once through the normal
+  `autoStart` flow — a cold install goes from zero to a running VM without extra clicks.
+- First-run documentation is now install → open the panel → automatic provisioning → VM start.
+
+### Fixed
+
+- The Environment card could stay empty on exactly the machines that needed setup: a
+  `GET /apk-vm/setup` payload with `ok: false` was treated as a failed request. It now renders
+  the report and exposes the manual and automatic setup actions from there.
+- The privacy scanner also matches non-ASCII workspace paths written with `/` (not only `\`),
+  gained an `--untracked` mode for scanning uncommitted files, and two host-specific example
+  paths in comments plus a test fixture were made host-neutral.
+
 ## 0.11.1
 
 Clipboard/text tools no longer need a panel to already have a control stream; network proxy has an alias.

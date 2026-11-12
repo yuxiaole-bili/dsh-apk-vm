@@ -60,7 +60,9 @@ The in-app Plugin Manager title/description comes from `locale/en.json` and `loc
    Also scan for your own hostname, private-network IPs and usernames. The repository ships a
    tracked-tree scanner: `npm run privacy` (use `node scripts/privacy-scan.mjs --all` only to
    inspect development history locally; the full history is not part of the clean release
-   branch).
+   branch). While developing, `node scripts/privacy-scan.mjs --untracked` also covers files that
+   are not committed yet; the scanner matches Windows and non-ASCII paths written with either
+   `/` or `\`.
 
 3. Run the full headless suite:
 

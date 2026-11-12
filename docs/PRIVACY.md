@@ -18,19 +18,31 @@ reporting, advertising or a remote backend.
   not persisted to disk or transmitted externally.
 - **Configuration** (`cordis.patch.yml`) may contain local paths (`sdkRoot`, `emulatorPath`,
   `roots`). Do not commit a personal configuration to a public repository.
+- **Provisioned toolchain** (the managed JDK, Android SDK packages, system image and AVD) is
+  downloaded into local directories on the host — `~/.dsh/apk-vm/jdk` by default, plus the
+  Android SDK/AVD locations — and is never uploaded.
 
 ## Network activity
 
 - The plugin talks to the local DSH Web server and local `adb`/emulator processes.
-- The optional SDK bootstrap / install actions use the user's own `sdkmanager` and the official
-  Google Android SDK repository, only when explicitly enabled with
-  `allowSetupDownloads: true`. This plugin does not proxy or collect those downloads.
-- No third-party endpoints are contacted by the plugin itself.
+- **First-use provisioning (`autoSetup`, on by default).** When the environment is incomplete,
+  the plugin downloads a portable **Temurin JDK 17** (about 190 MB) from `api.adoptium.net` or —
+  when the GitHub-hosted asset is unreachable, as on some mainland-China networks — from the
+  built-in Tsinghua mirror (`mirrors.tuna.tsinghua.edu.cn`) or a user-configured `jdkMirror`
+  base. Every archive is verified against Adoptium's published SHA-256 checksum; the plugin sends
+  no identifying headers, cookies or user data. It then runs the user's own `sdkmanager` for the
+  Android SDK command-line tools, build-tools, platform and system image from the official Google
+  Android SDK repository. The plugin does not proxy or collect those downloads. Those downloads
+  are size- and time-bounded and HTTPS-only, and can be disabled with `autoSetup: false` (the
+  Environment card then offers the manual actions as before). No analytics, telemetry,
+  advertising or remote backend is involved, and no third-party endpoint other than the ones
+  listed above is contacted by the plugin itself.
 
 ## Public repository hygiene
 
 The repository ships `scripts/privacy-scan.mjs` and CI runs it on every push. It checks the
-tracked tree for personal paths, private-network IPs, agent instance IDs, credential patterns and
-emails. The development history may contain older local paths; publish the clean `open-source`
-branch (single initial commit) instead of the full development history. See
-[RELEASING](docs/RELEASING.md).
+tracked tree for personal paths (Windows, POSIX and non-ASCII workspace paths, matched with either
+path separator), private-network IPs, agent instance IDs, credential patterns and emails. Run
+`node scripts/privacy-scan.mjs --untracked` locally to include files that are not committed yet.
+The development history may contain older local paths; publish the clean `open-source` branch
+(single initial commit) instead of the full development history. See [RELEASING](RELEASING.md).

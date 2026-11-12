@@ -45,7 +45,7 @@ same-origin, loopback-only debug HTTP API and an `apk_vm` Agent tool.
 > 当前 **Windows x64 与 Linux x86_64（headless）为端到端已验证平台**；macOS 仅做探测/CI
 > 覆盖，详见 `docs/LINUX-E2E.md`。
 
-**Status:** `0.11.1` · Apache-2.0 · no npm runtime dependencies · no build step.
+**Status:** `0.12.0` · Apache-2.0 · no npm runtime dependencies · no build step.
 
 This is an open-source DSH plugin published on npm as **`dsh-apk-vm`**. Repository:
 [github.com/yuxiaole-bili/dsh-apk-vm](https://github.com/yuxiaole-bili/dsh-apk-vm).
@@ -90,7 +90,9 @@ and Agent-facing UI automation for development workflows.
 **Requirements**
 
 - Android SDK with `adb`, emulator, `sdkmanager`/`avdmanager`, a matching system image and an AVD
-  (the Environment card checks all of this; SDK bootstrap is opt-in).
+  (the Environment card checks all of this; on a cold machine the default `autoSetup` provisions
+  it — JDK 17, SDK, system image and AVD — on first use, downloading roughly 2.5 GB; set
+  `autoSetup: false` to keep setup manual).
 - Hardware virtualization: AEHD/WHPX on Windows, KVM on Linux, or HVF on macOS.
 - Node.js ≥ 20 only for the repository's headless checks; the plugin itself has no npm
   dependencies or build step.
@@ -106,8 +108,10 @@ and Agent-facing UI automation for development workflows.
 - `/apk-vm/*` HTTP routes and WebSocket upgrades are same-origin and **loopback-only by
   default**; `allowRemote: true` is an explicit opt-in for use behind a trusted authenticated
   proxy.
-- No telemetry. Network access only occurs for explicit SDK/system-image downloads through the
-  user's `sdkmanager`, or when the user configures a remote adb device.
+- No telemetry. Network access only occurs for `autoSetup` provisioning (a SHA-256-verified
+  Temurin JDK 17 from `api.adoptium.net`, then the user's own `sdkmanager` for SDK packages and
+  the system image — roughly 2.5 GB on a cold machine), for manual downloads you trigger, or
+  when you configure a remote adb device.
 
 **Compatibility**
 
@@ -162,6 +166,12 @@ key {"text":"HOME"}       -> returned to launcher
   installed, and — when `allowSetupDownloads: true` — install missing SDK components, or
   **bootstrap a completely empty host** (download Google command-line tools, extract, accept
   licenses, install platform-tools/emulator/build-tools/platform).
+- **Zero-config first run (即装即用).** `autoSetup: true` (default) provisions a completely cold
+  host on first use: it downloads a SHA-256-verified Temurin JDK 17 from Adoptium, bootstraps the
+  SDK command-line tools, installs `platform-tools`/`emulator`/`build-tools`/`platforms`, the
+  configured system image and the AVD, with live progress plus cancel/retry in the Environment
+  card (`autoSetup` on `GET/POST /apk-vm/setup`). The normal `autoStart` flow then boots the VM;
+  set `autoSetup: false` to keep setup manual.
 - **Multi-agent isolation / multi-instance.** Several DSH Agents can drive separate VMs at the
   same time: each conversation owns a renewable lease on the VM it uses, so a second
   conversation never silently steals the first one's emulator. The first conversation gets the
@@ -470,10 +480,10 @@ APK, private key or host-specific path is required.
 | Requirement | Notes |
 | --- | --- |
 | **DeepSeek Harness** | A profile that can install local plugin bundles (the desktop Web UI or any agent with the `plugin_manager` tool). |
-| **Android SDK** | `platform-tools` (adb), `emulator`, `build-tools` (for `aapt2`), command-line tools (`sdkmanager`/`avdmanager`) and an AOSP system image. A JDK (17 works) is needed by the SDK command-line tools. |
+| **Android SDK** | `platform-tools` (adb), `emulator`, `build-tools` (for `aapt2`), command-line tools (`sdkmanager`/`avdmanager`) and an AOSP system image. The SDK command-line tools need a JDK (17 works); on a cold machine the default `autoSetup` downloads a portable Temurin JDK 17 and bootstraps the SDK itself. |
 | **AOSP system image** | `system-images;android-34;default;x86_64` (Android 14, API 34) — the image used for all measurements below. Configurable with `systemImage`. |
 | **Hardware virtualization** | Required for the x86_64 image: AEHD or WHPX on Windows, KVM on Linux, HVF on macOS. See [acceleration matrix](#cpu-acceleration-matrix). |
-| **Disk / RAM** | A few GB for the SDK + system image and the AVD; an emulator with a modern desktop GPU is recommended. |
+| **Disk / RAM** | A few GB for the SDK + system image and the AVD (first-run provisioning downloads roughly 2.5 GB: JDK ≈190 MB + command-line tools + SDK packages + system image); an emulator with a modern desktop GPU is recommended. |
 | **Node.js 24+** *(optional)* | Only for running this repository's checks ([Verification](#verification)). The plugin itself has no npm dependencies. |
 
 The plugin's **Environment** card performs this check for you (see
@@ -527,13 +537,29 @@ Then pick one:
 After installing or upgrading the plugin, **reload the DSH Web page** so the new client bundle
 is loaded.
 
-### 3. Provide an Android SDK, system image and AVD
+### 3. Provide an Android SDK, system image and AVD (automatic by default)
+
+With the shipped `autoSetup: true` this step is automatic: the first `/apk-vm/state` or
+`/apk-vm/setup` request — opening the panel, or an Agent's first `apk_vm` call — detects what is
+missing and provisions it in the background while the **Environment** card shows the current
+step. The chain is:
+
+1. **JDK 17** — when no system JDK/`JAVA_HOME` is found, a portable Temurin build is downloaded
+   from Adoptium (`api.adoptium.net`, SHA-256 verified) into `~/.dsh/apk-vm/jdk` (override with
+   `jdkRoot`). Adoptium's archive is hosted on GitHub; when that is unreachable (for example on
+   mainland-China networks) a built-in Tsinghua mirror is tried next with the same checksum.
+2. **Command-line tools** — `commandlinetools` are unpacked and SDK licenses accepted.
+3. **SDK packages** — `platform-tools`, `emulator`, `build-tools` and `platforms`.
+4. **System image** — the configured `systemImage` (default `system-images;android-34;default;x86_64`).
+5. **AVD** — `avdName` (default `dsh_apk`) is created.
+
+**Cancel** / **Retry** are available in the card, and the same state is exposed as `autoSetup`
+in `GET /apk-vm/setup`. Set `autoSetup: false` to provision manually instead:
 
 The plugin auto-discovers the SDK (`sdkRoot`, `ANDROID_HOME`, `ANDROID_SDK_ROOT`, then common
-per-OS locations) and adb/emulator. Fastest path: open the panel, check the **Environment**
-card, and use **Create AVD** once the system image is installed. If the image is missing and
-`allowSetupDownloads: true` is set, the card can also run `sdkmanager --install` for it;
-otherwise install it yourself:
+per-OS locations) and adb/emulator; the Environment card's one-click actions remain available as
+a fallback (including **Create AVD** and, with `allowSetupDownloads: true`, an
+`sdkmanager --install` for the image). The manual commands are:
 
 ```bash
 sdkmanager --install "platform-tools" "emulator" "build-tools;34.0.0" \
@@ -575,7 +601,10 @@ config:
   instanceReapIntervalMs: 60000
   leaseTtlMs: 1800000              # VM owner lease lifetime; renewed by apk_vm calls
   allowRemote: false               # reject non-loopback VM API clients
-  allowSetupDownloads: false       # gate the optional system-image download action
+  autoSetup: true                  # zero-config first run: auto-provision JDK 17 + SDK + image + AVD
+  # jdkRoot: 'C:/tools/dsh-jdk'   # where the auto-downloaded JDK 17 lives
+  # jdkMirror: 'https://mirrors.tuna.tsinghua.edu.cn/Adoptium'  # override the JDK mirror fallback
+  allowSetupDownloads: false       # gate the optional manual system-image download action
   scrcpy: true
   scrcpyMaxSize: 960
   scrcpyMaxFps: 60
@@ -590,10 +619,12 @@ to attach an existing device instead.
 
 ### 5. First run
 
-1. Open the DSH sidebar and click **APK Virtual Machine**. Check the **Environment** card:
-   green **Ready** means the SDK, image, AVD and acceleration were found; **Setup needed** lists
-   what is missing and offers **Create AVD** (and optionally **Download image** when
-   `allowSetupDownloads: true`).
+1. Open the DSH sidebar and click **APK Virtual Machine**. On a cold machine the **Environment**
+   card shows **Setup needed** and starts the automatic provisioning chain (progress with
+   **Cancel** / **Retry**; see
+   [step 3](#3-provide-an-android-sdk-system-image-and-avd-automatic-by-default)). Green
+   **Ready** means the SDK, image, AVD and acceleration were found. Hypervisor setup is the one
+   prerequisite the plugin cannot do for you — see [Prerequisites](#1-prerequisites).
 2. Press **Start VM** (or let `prewarm`/`autoStart` boot it). The **first start is a cold boot**
    (measured 29.5 s on the reference host); the plugin then saves the quick-boot snapshot
    `default_boot`, and later starts restore it (measured 8.4–10.5 s).
@@ -639,6 +670,9 @@ All keys are optional; defaults are shown in the **Default** column.
 | `leaseTtlMs` | `1800000` | Lifetime of a VM owner lease. Every `apk_vm` call that routes to the VM renews it; set `0` to disable expiry. |
 | `allowRemote` | `false` | Allow non-loopback clients to reach `/apk-vm/*` and `/apk-vm/ws` (only behind your own authenticated proxy). |
 | `allowSetupDownloads` | `false` | Allow the Environment card's `install-image` action to run `sdkmanager --install` (large download). |
+| `autoSetup` | `true` | Provision a missing JDK 17 / SDK packages / system image / AVD automatically on first use (roughly 2.5 GB on a cold machine). Set `false` to keep setup manual. |
+| `jdkRoot` | `~/.dsh/apk-vm/jdk` | Where the auto-downloaded Temurin JDK 17 is installed. A system JDK / `JAVA_HOME` is preferred when present. |
+| `jdkMirror` | built-in Tsinghua mirror | Mirror base URL (or array of bases) used for the Temurin JDK archive when the GitHub-hosted Adoptium download is unreachable, verified with the same SHA-256 checksum. Env: `DSH_APK_VM_JDK_MIRROR`; an empty value disables the fallback. |
 | `frameFps` | `2` | PNG fallback target frame rate, 1–10 (the H.264 path is not affected). |
 | `scrcpy` | `true` | Enable the H.264/WebCodecs transport. |
 | `scrcpyMaxSize` | `960` | Encoder max size; 960 yields 540×960 video. |
@@ -649,8 +683,12 @@ All keys are optional; defaults are shown in the **Default** column.
 
 The Environment report (`GET /apk-vm/setup`) returns `ok`, `platform`, `sdkRoot`, `adbPath`,
 `emulatorPath`, `avdmanagerPath`, `sdkmanagerPath`, `emulatorVersion`, `systemImage` +
-`systemImagePresent`, `avdName` + `avdPresent` + `avdPath`, `accel { available, backend,
-detail }`, `hypervisorNotes`, `missing[]` and `actions[]` with per-action availability.
+`systemImagePresent`, `avdName` + `avdPresent` + `avdPath`, `javaHome` + `javaPresent`,
+`accel { available, backend, detail }`, `hypervisorNotes`, `missing[]` and `actions[]` with
+per-action availability. It also carries the auto-setup state: `autoSetupEnabled` plus
+`autoSetup { state, step, totalSteps, stepId, message, error, warnings[], startedAt,
+finishedAt }`; `POST /apk-vm/setup` with `{ action: "auto-setup" }` starts/retries provisioning
+and `{ action: "cancel-auto-setup" }` cancels it.
 
 ---
 
@@ -683,7 +721,7 @@ detail }`, `hypervisorNotes`, `missing[]` and `actions[]` with per-action availa
 | Layer | Implementation | Role |
 | --- | --- | --- |
 | VM | AOSP Android Emulator (`emulator` + `system-images;android-34;default;x86_64`) | Boots the open-source Android system image; driven through adb. |
-| Setup | [lib/setup.js](lib/setup.js) | Dependency-free SDK / adb / emulator / AVD / acceleration detection plus one-click `create-avd` and optional `install-image`. |
+| Setup | [lib/setup.js](lib/setup.js), [lib/jdk.js](lib/jdk.js), [lib/autosetup.js](lib/autosetup.js) | Dependency-free SDK / adb / emulator / AVD / acceleration detection plus one-click `create-avd` and optional `install-image`; `lib/jdk.js` provisions a managed Temurin JDK 17 and `lib/autosetup.js` runs the first-use auto-provisioning chain. |
 | Streaming | scrcpy 5.0.1 server (`lib/vendor/scrcpy-server-v5.0.1.jar`, pushed to `/data/local/tmp/scrcpy-server.jar`) + [lib/scrcpy.js](lib/scrcpy.js) | H.264 screen capture and the scrcpy control protocol, without the desktop scrcpy client. |
 | Device bridge | `adb` from Android SDK platform-tools | install / launch / screencap / input / logcat / file push-pull. |
 | Plugin runtime | DSH plugin APIs (`slots`, `locale`, `webServer`, `tools`, `dsh.client`) | Sidebar entry, main panel, same-origin HTTP/WebSocket control plane, agent tool. |
@@ -736,7 +774,7 @@ JSON bodies are bounded to 64 KiB; the raw APK upload is bounded to 500 MiB.
 | --- | --- | --- |
 | GET | `/apk-vm/state` | VM state, serial, boot time/kind, accel/GPU, root/debug status, display size, current APK, stream counters, log tail. |
 | GET | `/apk-vm/setup?force=1` | Environment report (SDK/adb/emulator/tools/image/AVD/acceleration, missing items, available actions). Cached ~15 s. |
-| POST | `/apk-vm/setup` | `{"action":"refresh"\|"create-avd"\|"install-image"\|"install-tools"\|"bootstrap-sdk"}`. `install-tools`/`bootstrap-sdk` accept optional `packages`; all download actions require `allowSetupDownloads: true` (otherwise `403`) and are never automatic. |
+| POST | `/apk-vm/setup` | `{"action":"refresh"\|"create-avd"\|"install-image"\|"install-tools"\|"bootstrap-sdk"}` plus `"auto-setup"` / `"cancel-auto-setup"` for first-use provisioning. `install-tools`/`bootstrap-sdk` accept optional `packages`; manual download actions require `allowSetupDownloads: true` or `confirmDownload: true` (otherwise `403`). |
 | GET | `/apk-vm/apks` | Discover `*.apk` files under the configured roots. |
 | GET | `/apk-vm/apk-info?path=…` | Static APK metadata (package/version/targetSdk/permissions/features/native code/launch activity/icon path) via `aapt2`. |
 | GET/HEAD | `/apk-vm/apk-icon?path=…` | Extract the raster launcher icon from the APK ZIP (PNG/WebP/JPEG). |
@@ -969,15 +1007,32 @@ node spike/android/launch-plan.mjs
 ### The Environment card says "Setup needed"
 
 The report lists each missing item: SDK path, `adb`, emulator, `sdkmanager`/`avdmanager`, the
-configured system image, the AVD, or CPU acceleration.
+configured system image, the AVD, or CPU acceleration. With the default `autoSetup: true` the
+card starts provisioning automatically; while it runs you see the current step plus **Cancel** /
+**Retry**.
 
-- Missing SDK/emulator: install Android SDK packages and/or set `sdkRoot` (or `ANDROID_HOME` /
-  `ANDROID_SDK_ROOT`).
-- Missing system image: install it with `sdkmanager`, or set `allowSetupDownloads: true` and use
-  **Download image** in the card (large download; never automatic).
-- Missing AVD: use **Create AVD** in the card (requires the system image and `avdmanager`) or run
+- Missing JDK: auto-setup downloads Temurin JDK 17 into `~/.dsh/apk-vm/jdk` automatically; a
+  system JDK / `JAVA_HOME` is used instead when present.
+- Missing SDK/emulator: auto-setup installs the SDK packages; or set `sdkRoot` (or
+  `ANDROID_HOME` / `ANDROID_SDK_ROOT`) to an existing SDK.
+- Missing system image: auto-setup installs it; or install it with `sdkmanager`, or set
+  `allowSetupDownloads: true` and use **Download image** in the card.
+- Missing AVD: auto-setup creates it; or use **Create AVD** / run
   `avdmanager create avd -n dsh_apk -k "system-images;android-34;default;x86_64"`.
-- Missing acceleration: see the next section.
+- Missing acceleration: see the next section — this is a host-level requirement auto-setup cannot
+  satisfy.
+
+### Auto-setup fails or is stuck
+
+The card shows the last step and the error (`autoSetup.error` in `GET /apk-vm/setup`). Common
+causes: no network access to `api.adoptium.net` / `dl.google.com` (or to `github.com`, where
+Adoptium hosts the JDK archive — the built-in Tsinghua mirror is tried automatically), a proxy or
+firewall, an antivirus locking freshly extracted files, or less than ~3 GB free disk space. Press
+**Retry**: the JDK archive is reused when its SHA-256 checksum matches, so retries do not
+re-download it; a mirror can be pinned with `jdkMirror` (or `DSH_APK_VM_JDK_MIRROR`).
+You can also set `autoSetup: false` and provision manually (see
+[step 3](#3-provide-an-android-sdk-system-image-and-avd-automatic-by-default)); parts that already
+succeeded are skipped on the next attempt.
 
 ### "No usable CPU hypervisor (AEHD/WHPX) was found"
 
@@ -1093,8 +1148,12 @@ before pointing the DSH Web UI at an untrusted network.
 - **Upload and environment setup are privileged local actions.** Upload accepts only APK/ZIP
   bytes up to 500 MiB and installs them into the guest; `create-avd` writes an AVD; and
   `install-image` runs `sdkmanager --install` only when the user opted in with
-  `allowSetupDownloads: true` (default `false`). All of these are reachable only from the same
-  origin.
+  `allowSetupDownloads: true` (default `false`). Automatic provisioning (`autoSetup`, default
+  `true`) also downloads the JDK 17 from `api.adoptium.net` (SHA-256 verified; when the
+  GitHub-hosted asset is unreachable the built-in mirror is used with the same checksum) and
+  runs the user's own `sdkmanager`/`avdmanager` for the SDK packages, image and AVD on first
+  use; set `autoSetup: false` to disable it. All of these are reachable only from the same origin and
+  loopback clients.
 - **The `apk_vm` Agent tool is available to every agent in the DSH profile.** Grant agent access
   to this plugin with the same care as giving an agent a terminal on an Android device.
 - **Loopback-only by default.** In addition to the same-origin check, every `/apk-vm/*` HTTP
@@ -1104,10 +1163,10 @@ before pointing the DSH Web UI at an untrusted network.
 - **Keep the DSH Web server local.** If you expose the DSH Web UI beyond localhost (reverse
   proxy, LAN bind, tunnel), you also expose the plugin routes. Add authentication at the proxy
   layer or keep the port local; do not disable the same-origin/loopback checks.
-- **No telemetry.** The plugin makes no network requests of its own to third-party services;
-  it only talks to the local adb/emulator and the same-origin DSH Web server (the opt-in
-  `install-image` action runs the user's own `sdkmanager`, which does contact Google's SDK
-  repository).
+- **No telemetry.** The plugin makes no network requests of its own to analytics or tracking
+  services; network activity is limited to `autoSetup` provisioning (Temurin JDK from
+  `api.adoptium.net` or its mirror, then the SDK packages/image through the user's own
+  `sdkmanager`, which contacts Google's SDK repository) and the same-origin DSH Web server.
 
 To report a vulnerability, follow [SECURITY.md](SECURITY.md) — please use private disclosure,
 not a public issue.
@@ -1169,7 +1228,7 @@ node spike/setup-smoke.mjs
 node spike/android/mock-device.mjs
 node spike/android/launch-plan.mjs
 node spike/instances-smoke.mjs
-node scripts/privacy-scan.mjs
+node scripts/privacy-scan.mjs --untracked
 ```
 
 Use [.github/ISSUE_TEMPLATE/bug_report.yml](.github/ISSUE_TEMPLATE/bug_report.yml) for bugs and

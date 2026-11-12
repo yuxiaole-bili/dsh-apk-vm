@@ -27,6 +27,8 @@ import { OWNER_SCOPE, normalizeScope } from './lib/vm-ownership.js';
 import { checkOwnerAccess, ownerFromHttp } from './lib/http-owner.js';
 import { ScrcpySession, annexbToAvcc, CONTROL_MESSAGE_TYPE } from './lib/scrcpy.js';
 import { detectEnvironment, createAvd, installSystemImage, installSdkPackages, bootstrapSdk, DEFAULT_SYSTEM_IMAGE } from './lib/setup.js';
+import { createAutoSetup } from './lib/autosetup.js';
+import { ensureJdk, defaultJdkRoot } from './lib/jdk.js';
 import { acceptWebSocket } from './lib/ws.js';
 import { parseUiHierarchy, decorateUiNodes, buildInspectorPayload, snapshotIdForXml } from './lib/ui-inspector.js';
 import { annotateScreenshot } from './lib/png-annotate.js';
@@ -404,6 +406,9 @@ export function apply(ctx, config = {}) {
 
   let setupCache = null;
   let setupCacheAt = 0;
+  // The managed JDK directory lib/jdk.js downloads into. Passing it explicitly
+  // keeps detection/installs consistent when cfg.jdkRoot overrides the default.
+  const configuredJdkRoot = cfg.jdkRoot ? String(cfg.jdkRoot) : defaultJdkRoot({ platform: process.platform });
   async function loadSetup(force = false) {
     const now = Date.now();
     if (!force && setupCache && now - setupCacheAt < 15000) return setupCache;
@@ -413,9 +418,129 @@ export function apply(ctx, config = {}) {
       emulatorPath: cfg.emulatorPath || undefined,
       avdName: cfg.avdName || undefined,
       systemImage: cfg.systemImage || DEFAULT_SYSTEM_IMAGE,
+      jdkRoot: configuredJdkRoot,
     });
     setupCacheAt = now;
     return setupCache;
+  }
+
+  /* ---- "即装即用" auto-provisioning ---------------------------------- *
+   * On FIRST USE (GET /apk-vm/state or GET /apk-vm/setup) an incomplete
+   * environment is provisioned in the background: managed JDK -> command-line
+   * tools -> SDK packages -> system image -> AVD. The chain reports progress on
+   * the HTTP status payloads, can be cancelled between steps and retried
+   * explicitly. Multiple triggers share one run (single-flight inside
+   * lib/autosetup.js); a failed/cancelled run is not retried by polling.     */
+  const autoSetupEnabled = cfg.autoSetup !== false;
+  let lastAutoSetupState = null;
+
+  function autoSetupLog(line) {
+    try {
+      vm._pushLog(String(line));
+    } catch {
+      /* logging must never break provisioning */
+    }
+  }
+
+  let autoSetupReadyHandled = false; // provisioning adoption / auto-start fire once
+
+  /**
+   * After auto-provisioning completes, let the already-constructed VM and the
+   * multi-instance manager see the freshly installed SDK, emulator and AVD, and
+   * boot the VM once. On a fresh install none of that existed when apply() ran,
+   * so the normal auto-start guard (vm fields) could not fire on its own.
+   */
+  async function adoptProvisionedEnvironment() {
+    try {
+      const report = await loadSetup(true); // force a fresh detection after provisioning
+      try {
+        vm.applyEnvironment({
+          sdkRoot: report && report.sdkRoot,
+          adbPath: report && report.adbPath,
+          emulatorPath: report && report.emulatorPath,
+          avdName: report && report.avdName,
+        });
+      } catch (error) {
+        autoSetupLog(`[auto-setup] VM environment adoption failed: ${error && error.message ? error.message : error}`);
+      }
+      if (instanceManager && report) {
+        try {
+          if (!instanceManager.sdkRoot && report.sdkRoot) instanceManager.sdkRoot = String(report.sdkRoot);
+          if (!instanceManager.adbPath && report.adbPath) instanceManager.adbPath = String(report.adbPath);
+          if (!instanceManager.emulatorPath && report.emulatorPath) {
+            instanceManager.emulatorPath = String(report.emulatorPath);
+          }
+        } catch (error) {
+          autoSetupLog(
+            `[auto-setup] instance manager environment adoption failed: ${error && error.message ? error.message : error}`,
+          );
+        }
+      }
+      // Boot once: the VM only becomes startable now that it knows its paths.
+      if (preferAutoStart && !autoStartKicked && report && report.avdPresent && vm.emulatorPath) {
+        autoStartKicked = true;
+        void ensureStarted();
+      }
+    } catch (error) {
+      autoSetupLog(`[auto-setup] post-provisioning setup failed: ${error && error.message ? error.message : error}`);
+    }
+  }
+
+  function buildAutoSetup(enabled) {
+    return createAutoSetup({
+      enabled,
+      sdkRoot: cfg.sdkRoot || undefined,
+      adbPath: cfg.adbPath || undefined,
+      emulatorPath: cfg.emulatorPath || undefined,
+      avdName: cfg.avdName || 'dsh_apk',
+      systemImage: cfg.systemImage || DEFAULT_SYSTEM_IMAGE,
+      platform: process.platform,
+      jdkRoot: configuredJdkRoot,
+      jdkMirror: cfg.jdkMirror,
+      log: autoSetupLog,
+      onUpdate: (snapshot) => {
+        if (snapshot.state === lastAutoSetupState) return;
+        lastAutoSetupState = snapshot.state;
+        if (snapshot.state === 'ready') {
+          setupCache = null; // next GET re-detects
+          if (!autoSetupReadyHandled) {
+            autoSetupReadyHandled = true;
+            void adoptProvisionedEnvironment();
+          }
+        }
+        autoSetupLog(`[auto-setup] ${snapshot.state}: ${snapshot.message}`);
+        if (snapshot.state === 'failed' && snapshot.error) autoSetupLog(`[auto-setup] ${snapshot.error}`);
+      },
+      deps: {
+        detectEnvironment,
+        ensureJdk,
+        bootstrapSdk,
+        installSdkPackages,
+        installSystemImage,
+        createAvd,
+      },
+    });
+  }
+
+  const autoSetup = buildAutoSetup(autoSetupEnabled);
+  // cfg.autoSetup === false means "do not provision automatically"; an explicit
+  // POST /apk-vm/setup { action:'auto-setup', confirmDownload:true } may still
+  // start one run (in that case an enabled second instance is built lazily).
+  let autoSetupOverride = null;
+  function activeAutoSetup() {
+    return autoSetupOverride || autoSetup;
+  }
+
+  /**
+   * Kick provisioning on first use. Deliberately not repeated on every poll:
+   * failed/cancelled runs require an explicit retry via POST /apk-vm/setup so
+   * the panel's state polling cannot hammer a failing download in a loop.
+   */
+  function maybeAutoSetup(reason) {
+    if (!autoSetupEnabled) return;
+    const current = activeAutoSetup().status();
+    if (current.state === 'failed' || current.state === 'cancelled') return;
+    void activeAutoSetup().start(reason).catch(() => {});
   }
 
   function getScrcpyState() {
@@ -816,7 +941,7 @@ export function apply(ctx, config = {}) {
   function maybeAutoStart(status) {
     if (!preferAutoStart || autoStartKicked) return;
     if (!status || status.state !== 'stopped') return;
-    if (!cfg.emulatorPath && !cfg.serial) return; // nothing this plugin can start
+    if (!vm.emulatorPath && !vm.serial) return; // nothing this plugin can start
     if (status.serial) return;
     autoStartKicked = true;
     void ensureStarted();
@@ -908,6 +1033,7 @@ export function apply(ctx, config = {}) {
         },
         ...(instanceManager ? instanceManager.list() : []),
       ],
+      setup: { autoSetup: activeAutoSetup().status() },
       roots: rootsFor(),
     };
   }
@@ -1480,13 +1606,17 @@ export function apply(ctx, config = {}) {
         sendError(res, 405, 'GET only');
         return;
       }
-      sendJson(res, 200, await stateBody());
+      const body = await stateBody();
+      sendJson(res, 200, body);
+      maybeAutoSetup('state');
     });
 
     register('/apk-vm/setup', async (req, res) => {
       if (req.method === 'GET') {
         const url = new URL(req.url || '/', 'http://localhost');
-        sendJson(res, 200, await loadSetup(url.searchParams.get('force') === '1'));
+        const report = await loadSetup(url.searchParams.get('force') === '1');
+        sendJson(res, 200, { ...report, autoSetup: activeAutoSetup().status(), autoSetupEnabled });
+        maybeAutoSetup('setup');
         return;
       }
       if (req.method !== 'POST') {
@@ -1495,6 +1625,25 @@ export function apply(ctx, config = {}) {
       }
       const body = await readJsonBody(req);
       const action = String(body.action || '').toLowerCase();
+      if (action === 'auto-setup') {
+        if (!autoSetupEnabled && body.confirmDownload !== true) {
+          sendError(res, 403, 'automatic environment setup is disabled; set autoSetup: true or pass confirmDownload: true');
+          return;
+        }
+        if (!autoSetupEnabled && !autoSetupOverride) autoSetupOverride = buildAutoSetup(true);
+        const runner = activeAutoSetup();
+        // Do not await: a full JDK + SDK download can take minutes. The caller
+        // polls /apk-vm/state (or GET /apk-vm/setup) for progress.
+        void runner.start('api').catch(() => {});
+        sendJson(res, 200, { ok: true, autoSetup: runner.status() });
+        return;
+      }
+      if (action === 'cancel-auto-setup') {
+        const runner = activeAutoSetup();
+        runner.cancel();
+        sendJson(res, 200, { ok: true, autoSetup: runner.status() });
+        return;
+      }
       if (action === 'refresh') {
         sendJson(res, 200, { ok: true, setup: await loadSetup(true) });
         return;
@@ -1502,6 +1651,7 @@ export function apply(ctx, config = {}) {
       if (action === 'create-avd') {
         const result = await createAvd({
           sdkRoot: cfg.sdkRoot || undefined,
+          jdkRoot: configuredJdkRoot,
           emulatorPath: cfg.emulatorPath || undefined,
           avdName: body.avdName || cfg.avdName || 'dsh_apk',
           systemImage: cfg.systemImage || DEFAULT_SYSTEM_IMAGE,
@@ -1517,6 +1667,7 @@ export function apply(ctx, config = {}) {
         }
         const result = await installSystemImage({
           sdkRoot: cfg.sdkRoot || undefined,
+          jdkRoot: configuredJdkRoot,
           systemImage: cfg.systemImage || DEFAULT_SYSTEM_IMAGE,
           acceptLicenses: true,
         });
@@ -1536,6 +1687,7 @@ export function apply(ctx, config = {}) {
           : ['platform-tools', 'emulator', `build-tools;${apiLevel}.0.0`, `platforms;android-${apiLevel}`];
         const result = await installSdkPackages({
           sdkRoot: cfg.sdkRoot || undefined,
+          jdkRoot: configuredJdkRoot,
           packages,
           acceptLicenses: true,
         });
@@ -1550,6 +1702,7 @@ export function apply(ctx, config = {}) {
         }
         const result = await bootstrapSdk({
           sdkRoot: cfg.sdkRoot || undefined,
+          jdkRoot: configuredJdkRoot,
           packages: Array.isArray(body.packages) ? body.packages : undefined,
           acceptLicenses: true,
         });
@@ -2415,6 +2568,7 @@ export function apply(ctx, config = {}) {
         autoStartKicked = true;
         void ensureStarted();
         sendJson(res, 202, { ok: true, action, accepted: true, warm: true });
+        maybeAutoSetup('vm-start');
         return;
       }
       if (action === 'stop') {
@@ -3169,6 +3323,7 @@ export function apply(ctx, config = {}) {
     );
 
     return () => {
+      activeAutoSetup().cancel();
       void stopScrcpy();
       void cleanupUploads();
       for (const id of [...extraRouteDisposers.keys()]) disposeExtraRouteSet(id);
@@ -3202,7 +3357,7 @@ export function apply(ctx, config = {}) {
   // first panel/tab open lands on a running (or nearly booted) device. This is
   // what makes the visible "open the VM" step effectively instant; opt in with
   // `prewarm: true` because it consumes CPU/GPU while the plugin is loaded.
-  if (cfg.prewarm === true && (cfg.emulatorPath || cfg.serial)) {
+  if (cfg.prewarm === true && (vm.emulatorPath || vm.serial)) {
     ctx.effect(() => {
       const delay = Number.isFinite(cfg.prewarmDelayMs) && cfg.prewarmDelayMs >= 0 ? cfg.prewarmDelayMs : 3000;
       const timer = setTimeout(() => {
@@ -4319,7 +4474,12 @@ export function apply(ctx, config = {}) {
         case 'info': {
           const result = await api.deviceInfo();
           await api.ensureRoot();
-          return { ok: true, summary: `${api.id} ${status.serial}: Android ${result.identity?.release || '?'} root=${result.root}`, result };
+          return {
+            ok: true,
+            setup: { autoSetup: activeAutoSetup().status() },
+            summary: `${api.id} ${status.serial}: Android ${result.identity?.release || '?'} root=${result.root}`,
+            result,
+          };
         }
         case 'shell': {
           if (!args.command) throw new Error('action=shell requires command');

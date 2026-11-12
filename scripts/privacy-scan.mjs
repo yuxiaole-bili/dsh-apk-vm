@@ -5,21 +5,27 @@
  * This is intentionally conservative but avoids common false positives:
  * - loopback addresses and test fixtures are allowed;
  * - binary files are skipped;
- * - emails are only flagged outside LICENSE/NOTICE/upstream URLs.
+ * - emails are only flagged outside LICENSE/NOTICE/upstream URLs;
+ * - Windows and non-ASCII workspace paths match either separator (`D:\work`
+ *   and `D:/work`), because documentation and JSDoc examples often use `/`.
  *
  * Exit code 1 means at least one finding. Run with `--all` to also scan the
  * full git history (maintainers only; development history may be intentionally
- * unpublished — publish the clean `open-source` branch instead).
+ * unpublished — publish the clean `open-source` branch instead). Run with
+ * `--untracked` to include files that are not committed yet (useful while
+ * developing; the release tree is fully tracked, so release gates do not pass
+ * that flag).
  */
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 
 const args = new Set(process.argv.slice(2));
 const scanHistory = args.has('--all');
+const scanUntracked = args.has('--untracked');
 
 const rules = [
   { id: 'windows-personal-path', re: /[A-Za-z]:\\Users\\[^\\\s]+/i, why: 'Windows user profile path' },
-  { id: 'chinese-workspace-path', re: /[A-Za-z]:\\(?:滚木|[^\s\\]*[\u4e00-\u9fff][^\s\\]*)/, why: 'non-ASCII workspace path' },
+  { id: 'chinese-workspace-path', re: /[A-Za-z]:[\\/](?:滚木|[^\s\\/]*[\u4e00-\u9fff][^\s\\/]*)/, why: 'non-ASCII workspace path' },
   { id: 'posix-home-path', re: /(?:^|[^\w])\/(?:Users|home)\/[A-Za-z0-9._-]+\//, why: 'POSIX user home path' },
   { id: 'private-ipv4', re: /\b(?:10\.\d{1,3}\.\d{1,3}\.\d{1,3}|192\.168\.\d{1,3}\.\d{1,3}|172\.(?:1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3})\b/, why: 'private-network IPv4 address' },
   { id: 'agent-instance-id', re: /\bagent-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/i, why: 'DSH agent instance id' },
@@ -30,8 +36,13 @@ const rules = [
 ];
 
 function listFiles() {
-  const out = execFileSync('git', ['ls-files', '-z'], { encoding: 'utf8' });
-  return out.split('\0').filter(Boolean);
+  const tracked = execFileSync('git', ['ls-files', '-z'], { encoding: 'utf8' });
+  const files = tracked.split('\0').filter(Boolean);
+  if (!scanUntracked) return files;
+  const others = execFileSync('git', ['ls-files', '-z', '--others', '--exclude-standard'], {
+    encoding: 'utf8',
+  });
+  return [...new Set([...files, ...others.split('\0').filter(Boolean)])];
 }
 
 function scanFile(file, text) {
@@ -81,7 +92,7 @@ if (scanHistory) {
 }
 
 if (findings.length === 0) {
-  console.log(`privacy scan: clean (${listFiles().length} tracked files${scanHistory ? ' + history' : ''})`);
+  console.log(`privacy scan: clean (${listFiles().length} files${scanHistory ? ' + history' : ''})`);
   process.exit(0);
 }
 

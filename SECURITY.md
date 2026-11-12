@@ -4,8 +4,8 @@
 
 | Version | Supported |
 | --- | --- |
-| 0.3.x (current) | Yes |
-| < 0.3 | No |
+| 0.12.x (current) | Yes |
+| < 0.12 | No |
 
 The plugin is a local development tool. It is not designed or hardened as a multi-tenant or
 network-exposed service.
@@ -93,16 +93,32 @@ they demonstrate a way to exceed the stated boundaries.
    `create-avd` writes an AVD under the user's AVD home. `/apk-vm/setup` `install-image` runs
    `sdkmanager --install` only when `allowSetupDownloads: true` is configured (default `false`),
    because it is a large network download; it is never triggered automatically.
-8. **The plugin does not send telemetry** or contact third-party services on its own; it talks to
-   the local adb/emulator and the same-origin DSH Web server. The only network activity comes
-   from the user's own `sdkmanager` when they explicitly run the opt-in `install-image` action.
+8. **Automatic provisioning (`autoSetup`, default `true`) performs network downloads on first
+   use.** On the first `/apk-vm/state` or `/apk-vm/setup` request the plugin may download a
+   portable Temurin JDK 17 from `https://api.adoptium.net` — when the GitHub-hosted asset is
+   unreachable, a pinned mirror (Tsinghua Adoptium mirror, overridable with `jdkMirror` /
+   `DSH_APK_VM_JDK_MIRROR`) is used instead; the SHA-256 checksum published by Adoptium is
+   verified for every source before extraction, and extraction uses `Expand-Archive`/`tar` with an
+   argv array and a bounded archive. It then runs the user's own `sdkmanager`/`avdmanager`
+   against Google's SDK repository to install the command-line tools, `platform-tools`,
+   `emulator`, `build-tools`, `platforms`, the configured system image and the AVD. A cold
+   machine downloads roughly 2.5 GB into `~/.dsh/apk-vm` (JDK; override with `jdkRoot`) and the
+   configured SDK root. The chain is cancellable and retryable from the panel, and
+   `autoSetup: false` disables it entirely. It never downloads arbitrary URLs: the JDK asset is
+   resolved from Adoptium's API and every SDK artifact comes through the user's own
+   `sdkmanager`.
+9. **The plugin does not send telemetry** or contact third-party services on its own; it talks
+   to the local adb/emulator and the same-origin DSH Web server. Network activity is limited to
+   the `autoSetup` provisioning described above and the user's own `sdkmanager`; no analytics,
+   identifiers or usage data are collected.
 
 ## Hardening status
 
 The released plugin applies same-origin and loopback checks to every `/apk-vm/*` HTTP route and
 the `/apk-vm/ws` upgrade, bounded payloads for JSON and uploads, argument-array process spawning,
-and a restricted push/pull path set. The multi-touch (`/touch`), clipboard (`/clipboard`) and
-artifact-download routes are part of the same origin/loopback surface. There is no separate
-authentication token of its own: it relies on the DSH Web server's session and on the operator
-keeping that server local/trusted. Run this plugin only on a machine and local network you trust;
-do not treat the rooted Android guest as a security boundary.
+a restricted push/pull path set, and checksum-verified downloads for the auto-provisioned JDK.
+The multi-touch (`/touch`), clipboard (`/clipboard`) and artifact-download routes are part of the
+same origin/loopback surface. There is no separate authentication token of its own: it relies on
+the DSH Web server's session and on the operator keeping that server local/trusted. Run this
+plugin only on a machine and local network you trust; do not treat the rooted Android guest as a
+security boundary.

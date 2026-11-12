@@ -335,6 +335,19 @@ window.__ModuleLoader__.load({
       'setup.switch': 'Switch AVD',
       'setup.loading': 'Checking environment…',
       'setup.downloadsDisabled': 'Automatic system-image download is disabled (allowSetupDownloads).',
+      'setup.autoTitle': 'Automatic environment setup (works out of the box)',
+      'setup.autoNote': 'First use downloads about 2.5 GB (JDK 17 + Android SDK + Android 14 image).',
+      'setup.autoStart': 'Auto install',
+      'setup.autoStarting': 'Starting…',
+      'setup.autoRunning': 'Preparing environment {step}/{total}',
+      'setup.autoCancel': 'Cancel',
+      'setup.autoFailed': 'Automatic setup failed: {error}',
+      'setup.autoRetry': 'Retry',
+      'setup.autoCancelled': 'Automatic setup was cancelled.',
+      'setup.autoReady': 'Environment is ready.',
+      'setup.autoDisabled': 'Automatic setup is disabled; set up the environment manually.',
+      'setup.java': 'Java (JDK 17+)',
+      'setup.javaMissing': 'Java not found',
       'instances.label': 'VM instance',
       'instances.default': 'default',
       'instances.new': 'New VM',
@@ -653,6 +666,19 @@ window.__ModuleLoader__.load({
       'setup.switch': '切换 AVD',
       'setup.loading': '正在检测环境…',
       'setup.downloadsDisabled': '自动下载系统镜像已禁用（allowSetupDownloads）。',
+      'setup.autoTitle': '自动安装环境（即装即用）',
+      'setup.autoNote': '首次使用约下载 2.5 GB（JDK 17 + Android SDK + Android 14 镜像）。',
+      'setup.autoStart': '一键自动安装',
+      'setup.autoStarting': '正在启动…',
+      'setup.autoRunning': '自动准备环境 {step}/{total}',
+      'setup.autoCancel': '取消',
+      'setup.autoFailed': '自动安装失败：{error}',
+      'setup.autoRetry': '重试',
+      'setup.autoCancelled': '自动安装已取消。',
+      'setup.autoReady': '环境已就绪。',
+      'setup.autoDisabled': '自动安装已关闭，请手动配置环境。',
+      'setup.java': 'Java（JDK 17+）',
+      'setup.javaMissing': '未找到 Java',
       'instances.label': '虚拟机实例',
       'instances.default': '默认',
       'instances.new': '新建虚拟机',
@@ -1487,6 +1513,9 @@ window.__ModuleLoader__.load({
         var setupBusyState = React.useState(false);
         var setupBusy = setupBusyState[0];
         var setSetupBusy = setupBusyState[1];
+        var autoSetupBusyState = React.useState(false);
+        var autoSetupBusy = autoSetupBusyState[0];
+        var setAutoSetupBusy = autoSetupBusyState[1];
         var avdsState = React.useState([]);
         var avds = avdsState[0];
         var setAvds = avdsState[1];
@@ -1722,6 +1751,7 @@ window.__ModuleLoader__.load({
         var stateBusyRef = React.useRef(false);
         var vmBusyRef = React.useRef(false);
         var installingRef = React.useRef('');
+        var autoReadyRef = React.useRef('');
         var dragRef = React.useRef(null);
         var multiTouchRef = React.useRef(null);
         var latestRef = React.useRef({});
@@ -2537,6 +2567,12 @@ window.__ModuleLoader__.load({
               if (isObject(result.data) && Array.isArray(result.data.instances)) {
                 setInstancesList(result.data.instances);
               }
+              // The VM state payload also reports auto-setup progress; the server
+              // may have started provisioning on first use, so merge it so the
+              // panel shows progress without waiting for the next setup re-check.
+              if (isObject(result.data) && isObject(result.data.setup) && isObject(result.data.setup.autoSetup)) {
+                applyAutoSetup(result.data.setup.autoSetup);
+              }
             } else {
               setStateError(result.error || T('err.state'));
             }
@@ -3270,6 +3306,17 @@ window.__ModuleLoader__.load({
           if (next) loadInstalledApps();
         }
 
+        function isSetupReport(data) {
+          return (
+            isObject(data) &&
+            (hasOwn(data, 'sdkRoot') ||
+              hasOwn(data, 'missing') ||
+              hasOwn(data, 'platform') ||
+              hasOwn(data, 'autoSetup') ||
+              hasOwn(data, 'autoSetupEnabled'))
+          );
+        }
+
         function loadSetup(force) {
           if (!mountedRef.current && !force) return;
           setSetupBusy(true);
@@ -3277,6 +3324,11 @@ window.__ModuleLoader__.load({
             if (!mountedRef.current) return;
             setSetupBusy(false);
             if (result.ok && isObject(result.data)) setSetup(result.data);
+            // The setup report carries its own `ok` flag (environment complete or
+            // not). requestJson treats `ok:false` as a failure, but a report-shaped
+            // payload is still valid data — without it the Environment card would
+            // stay hidden on exactly the machines that need setup.
+            else if (isSetupReport(result.data)) setSetup(result.data);
           });
         }
 
@@ -3291,8 +3343,102 @@ window.__ModuleLoader__.load({
           });
         }, []);
 
+        /* ---- automatic provisioning (即装即用) ------------------------- */
+        var autoSetup = setup && isObject(setup.autoSetup) ? setup.autoSetup : null;
+        var autoSetupEnabled = isObject(setup) ? setup.autoSetupEnabled === true : false;
+        var autoSetupDisabledFlag = isObject(setup) ? setup.autoSetupEnabled === false : false;
+        var autoSetupStateName = autoSetup && typeof autoSetup.state === 'string' ? autoSetup.state : '';
+        var autoTotalRaw = autoSetup ? Number(autoSetup.totalSteps) : NaN;
+        var autoStepRaw = autoSetup ? Number(autoSetup.step) : NaN;
+        var autoTotalSteps = isFinite(autoTotalRaw) && autoTotalRaw >= 1 ? Math.round(autoTotalRaw) : 5;
+        var autoStep = isFinite(autoStepRaw) && autoStepRaw >= 1 ? Math.min(Math.round(autoStepRaw), autoTotalSteps) : 1;
+        var autoMessage = autoSetup && typeof autoSetup.message === 'string' ? autoSetup.message : '';
+        var autoError = autoSetup && typeof autoSetup.error === 'string' ? autoSetup.error : '';
+        var autoRunning = autoSetupStateName === 'running';
+        var autoReadyKey = autoSetup && autoSetup.finishedAt ? 'ready:' + String(autoSetup.finishedAt) : 'ready';
+
+        React.useEffect(function () {
+          if (!autoRunning) return undefined;
+          var stopped = false;
+          var timer = setInterval(function () {
+            requestJson('/apk-vm/setup', null, T).then(function (result) {
+              if (stopped || !mountedRef.current) return;
+              if (result.ok && isObject(result.data)) setSetup(result.data);
+              else if (isSetupReport(result.data)) setSetup(result.data);
+            });
+          }, 2000);
+          return function () {
+            stopped = true;
+            clearInterval(timer);
+          };
+        }, [autoRunning]);
+
+        React.useEffect(function () {
+          if (autoSetupStateName !== 'ready') return undefined;
+          if (autoReadyRef.current === autoReadyKey) return undefined;
+          autoReadyRef.current = autoReadyKey;
+          pushToast('success', T('setup.autoReady'));
+          if (mountedRef.current) {
+            loadSetup(true);
+            runVmAction('start');
+          }
+          return undefined;
+        }, [autoSetupStateName, autoReadyKey]);
+
+        function applyAutoSetup(status) {
+          if (!isObject(status)) return;
+          // The VM state poll carries the same auto-setup status; skip redundant
+          // setState calls so an unchanged running poll does not re-render.
+          if (
+            autoSetup &&
+            autoSetup.state === status.state &&
+            autoSetup.updatedAt === status.updatedAt &&
+            autoSetup.finishedAt === status.finishedAt &&
+            autoSetup.error === status.error
+          ) {
+            return;
+          }
+          setSetup(function (previous) {
+            if (!isObject(previous)) return previous;
+            var next = {};
+            for (var field in previous) {
+              if (Object.prototype.hasOwnProperty.call(previous, field)) next[field] = previous[field];
+            }
+            next.autoSetup = status;
+            return next;
+          });
+        }
+
+        function postAutoSetup(action) {
+          if (autoSetupBusy || setupBusy) return;
+          setAutoSetupBusy(true);
+          requestJson('/apk-vm/setup', { method: 'POST', body: JSON.stringify({ action: action }) }, T).then(function (result) {
+            if (!mountedRef.current) return;
+            setAutoSetupBusy(false);
+            var data = isObject(result.data) ? result.data : {};
+            if (!result.ok || data.ok === false) {
+              pushToast('error', String(data.error || result.error || T('err.state')).slice(0, 500));
+              loadSetup(true);
+              return;
+            }
+            if (isObject(data.autoSetup)) {
+              applyAutoSetup(data.autoSetup);
+            } else {
+              loadSetup(true);
+            }
+          });
+        }
+
+        function startAutoSetup() {
+          postAutoSetup('auto-setup');
+        }
+
+        function cancelAutoSetup() {
+          postAutoSetup('cancel-auto-setup');
+        }
+
         function switchAvd() {
-          if (!avdPick || setupBusy) return;
+          if (!avdPick || setupBusy || autoRunning) return;
           setSetupBusy(true);
           requestJson('/apk-vm/avd', { method: 'POST', body: JSON.stringify({ avdName: avdPick }) }, T).then(function (result) {
             if (!mountedRef.current) return;
@@ -3427,7 +3573,7 @@ window.__ModuleLoader__.load({
         }
 
         function runSetupAction(action) {
-          if (setupBusy) return;
+          if (setupBusy || autoRunning) return;
           setSetupBusy(true);
           requestJson(
             '/apk-vm/setup',
@@ -3449,7 +3595,7 @@ window.__ModuleLoader__.load({
         }
 
         function runOneClickSetup() {
-          if (setupBusy) return;
+          if (setupBusy || autoRunning) return;
           var order = ['bootstrap-sdk', 'install-tools', 'install-image', 'create-avd'];
           var steps = order.filter(function (id) {
             return (setupActions || []).some(function (entry) {
@@ -4317,9 +4463,105 @@ window.__ModuleLoader__.load({
               h('span', { className: 'apkvm-dim apkvm-setup-detail' }, detail || (ok ? 'OK' : 'missing'))
             );
           }
+          var autoBlock = null;
+          if (autoRunning) {
+            var autoProgressText = T('setup.autoRunning', { step: autoStep, total: autoTotalSteps });
+            autoBlock = h(
+              'div',
+              { className: 'apkvm-toolsline', title: autoMessage || autoProgressText },
+              h('span', { className: 'apkvm-spinner apkvm-spinner-sm', 'aria-hidden': 'true' }),
+              h(
+                'span',
+                {
+                  className: 'apkvm-dim',
+                  style: { flex: '1 1 auto', minWidth: 0, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' },
+                },
+                autoProgressText + (autoMessage ? ' · ' + autoMessage : '')
+              ),
+              actionBtn(T('setup.autoCancel'), {
+                key: 'auto-setup-cancel',
+                small: true,
+                disabled: autoSetupBusy,
+                onClick: cancelAutoSetup,
+              })
+            );
+          } else if (autoSetupStateName === 'failed') {
+            autoBlock = h(
+              'div',
+              { className: 'apkvm-toolsline' },
+              h(
+                'div',
+                { className: 'apkvm-inline-error', style: { flex: '1 1 auto', minWidth: 0 }, title: autoError },
+                T('setup.autoFailed', { error: autoError || T('err.state') })
+              ),
+              actionBtn(T('setup.autoRetry'), {
+                key: 'auto-setup-retry-failed',
+                small: true,
+                disabled: autoSetupBusy || setupBusy,
+                onClick: startAutoSetup,
+              })
+            );
+          } else if (autoSetupStateName === 'cancelled') {
+            autoBlock = h(
+              'div',
+              { className: 'apkvm-toolsline' },
+              h('span', { className: 'apkvm-dim', style: { flex: '1 1 auto' } }, T('setup.autoCancelled')),
+              actionBtn(T('setup.autoRetry'), {
+                key: 'auto-setup-retry-cancelled',
+                small: true,
+                disabled: autoSetupBusy || setupBusy,
+                onClick: startAutoSetup,
+              })
+            );
+          } else if (autoSetupStateName === 'ready') {
+            autoBlock = h(
+              'div',
+              { className: 'apkvm-toolsline', title: autoMessage || T('setup.autoReady') },
+              h(
+                'span',
+                { className: 'apkvm-dim', style: { flex: '1 1 auto', color: 'var(--dsw-alias-state-success-primary)' } },
+                '✓ ' + T('setup.autoReady')
+              )
+            );
+          } else if (autoSetupStateName === 'disabled' || autoSetupDisabledFlag) {
+            autoBlock = h(
+              'div',
+              { className: 'apkvm-dim', style: { whiteSpace: 'normal', overflow: 'visible' } },
+              T('setup.autoDisabled')
+            );
+          } else if (autoSetupEnabled) {
+            autoBlock = h(
+              'div',
+              { className: 'apkvm-toolsline', style: { alignItems: 'flex-start' } },
+              h(
+                'div',
+                { style: { flex: '1 1 auto', minWidth: 0, display: 'flex', flexDirection: 'column', gap: '1px' } },
+                h(
+                  'span',
+                  { style: { fontSize: '11px', lineHeight: '15px', color: 'var(--dsw-alias-label-primary)' } },
+                  T('setup.autoTitle')
+                ),
+                h('span', { className: 'apkvm-dim', style: { whiteSpace: 'normal', overflow: 'visible' } }, T('setup.autoNote'))
+              ),
+              actionBtn(autoSetupBusy ? T('setup.autoStarting') : T('setup.autoStart'), {
+                key: 'auto-setup-start',
+                small: true,
+                variant: 'primary',
+                disabled: autoSetupBusy || setupBusy,
+                onClick: startAutoSetup,
+              })
+            );
+          }
+          // Keep the card folded unless auto provisioning needs attention; the
+          // collapsed card would otherwise hide first-use progress entirely.
+          var autoExpanded =
+            autoRunning ||
+            autoSetupStateName === 'failed' ||
+            autoSetupStateName === 'cancelled' ||
+            autoSetupStateName === 'ready';
           setupCard = h(
             'details',
-            { className: 'apkvm-card apkvm-debug apkvm-setup' },
+            { className: 'apkvm-card apkvm-debug apkvm-setup', open: autoExpanded ? true : undefined },
             h(
               'summary',
               { className: 'apkvm-debug-summary' },
@@ -4336,9 +4578,13 @@ window.__ModuleLoader__.load({
               'div',
               { className: 'apkvm-debug-body' },
               setupRow(T('setup.sdk'), Boolean(setup.sdkRoot && setup.adbPath), setup.sdkRoot || ''),
+              hasOwn(setup, 'javaHome')
+                ? setupRow(T('setup.java'), Boolean(setup.javaHome), setup.javaHome || T('setup.javaMissing'))
+                : null,
               setupRow(T('setup.accel'), Boolean(setup.accel && setup.accel.available), setup.accel ? setup.accel.backend || setup.accel.detail || '' : ''),
               setupRow(T('setup.image'), setup.systemImagePresent === true, setup.systemImage || ''),
               setupRow(T('setup.avd'), setup.avdPresent === true, setup.avdName || ''),
+              autoBlock,
               setupMissing.length
                 ? h('div', { className: 'apkvm-inline-error', title: setupMissing.join('\n') }, setupMissing.slice(0, 3).join(' · '))
                 : null,
@@ -4357,7 +4603,7 @@ window.__ModuleLoader__.load({
                       'select',
                       {
                         value: avdPick,
-                        disabled: setupBusy,
+                        disabled: setupBusy || autoRunning,
                         onChange: function (event) {
                           setAvdPick(event && event.target ? String(event.target.value) : '');
                         },
@@ -4380,7 +4626,7 @@ window.__ModuleLoader__.load({
                     actionBtn(T('setup.switch'), {
                       key: 'switch-avd',
                       small: true,
-                      disabled: setupBusy || !avdPick,
+                      disabled: setupBusy || autoRunning || !avdPick,
                       onClick: switchAvd,
                     })
                   )
@@ -4467,7 +4713,7 @@ window.__ModuleLoader__.load({
                       key: 'setup-one-click',
                       small: true,
                       variant: 'primary',
-                      disabled: setupBusy,
+                      disabled: setupBusy || autoRunning,
                       onClick: runOneClickSetup,
                     })
                   : null,
@@ -4482,7 +4728,7 @@ window.__ModuleLoader__.load({
                   return actionBtn(label, {
                     key: 'setup-' + entry.id,
                     small: true,
-                    disabled: setupBusy,
+                    disabled: setupBusy || autoRunning,
                     onClick: function () {
                       runSetupAction(entry.id);
                     },

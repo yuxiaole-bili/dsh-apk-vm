@@ -42,9 +42,24 @@
         scrcpyMaxSize: 960
         scrcpyMaxFps: 60
         scrcpyBitrate: 6000000
-        # System-image downloads (~1 GB) are never automatic; the Environment
-        # card shows the exact missing pieces and the create-avd action works
-        # once the image is present.
+        # Zero-config first run: on the first /apk-vm/state or /apk-vm/setup
+        # request, provision whatever is missing in the background — JDK 17
+        # (Temurin, SHA-256 verified), Android SDK command-line tools, SDK
+        # packages, the system image (~1.7 GB) and the AVD — then the normal
+        # autoStart boots the VM. A cold machine downloads roughly 2.5 GB in
+        # total. Set false to keep setup fully manual (the Environment card
+        # still offers the one-click chain and create-avd).
+        autoSetup: true
+        # Optional location of the plugin-managed JDK 17. A system JDK or
+        # JAVA_HOME is still preferred when present.
+        # jdkRoot: 'C:/tools/dsh-jdk'
+        # Mirror fallback for the Temurin JDK archive. Adoptium hosts it on
+        # GitHub; when that is unreachable the built-in Tsinghua mirror is
+        # tried automatically (still verified against Adoptium's SHA-256).
+        # Accepts a base URL or a list of bases; '' disables the fallback.
+        # jdkMirror: 'https://mirrors.tuna.tsinghua.edu.cn/Adoptium'
+        # Manual (user-triggered only) system-image download from the
+        # Environment card; autoSetup does not need this flag.
         allowSetupDownloads: false
         # The VM routes accept root shell/debug actions, so they reject
         # non-loopback clients by default even if the DSH web UI is exposed to
