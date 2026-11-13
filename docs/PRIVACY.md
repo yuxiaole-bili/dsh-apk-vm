@@ -21,13 +21,15 @@ reporting, advertising or a remote backend.
 - **Provisioned toolchain** (the managed JDK, Android SDK packages, system image and AVD) is
   downloaded into local directories on the host — `~/.dsh/apk-vm/jdk` by default, plus the
   Android SDK/AVD locations — and is never uploaded.
-- **The Agent activity journal** (`<profile>/.apk-vm/activity/activity.jsonl` plus
-  `screenshots/<id>.png`) records `apk_vm` tool calls made by Agents — action name, a bounded
-  argument preview, success/error, duration, instance, and an optional screenshot for mutating
-  actions such as tap/install. It is stored on this host only, ring-pruned (1000 entries /
-  250 MB by default) and can be cleared from the panel or with
-  `POST /apk-vm/activity/clear`. Because entries can contain screen content and command
-  arguments, clear the journal before sharing the panel or its recordings.
+- **The activity journal** (`<profile>/.apk-vm/activity/activity.jsonl` plus
+  `screenshots/<id>.png`) records `apk_vm` tool calls made by Agents and mutating operations
+  performed in the panel (taps, swipes, typed text, installs, snapshots, debug commands) —
+  action name, a bounded argument preview, success/error, duration, instance, `source`
+  (`tool` / `http` / `system`) and an optional screenshot for mutating actions such as
+  tap/install. It is stored on this host only, ring-pruned (1000 entries / 250 MB by
+  default) and can be cleared from the panel or with `POST /apk-vm/activity/clear`.
+  Because entries can contain screen content and command arguments (typed text is recorded
+  as a character count only), clear the journal before sharing the panel or its recordings.
 
 ## Network activity
 

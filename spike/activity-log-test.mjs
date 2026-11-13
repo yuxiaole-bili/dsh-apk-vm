@@ -129,6 +129,11 @@ async function main() {
     const newestFirst = await log.list();
     same(newestFirst.entries.map((entry) => entry.id), [third.id, second.id, first.id], 'list is newest-first');
     same(newestFirst.entries.map((entry) => entry.summary), ['third', 'second', 'first'], 'newest-first summaries');
+    const httpOnly = await log.list({ source: 'http' });
+    same(httpOnly.entries.map((entry) => entry.summary), ['third'], 'source filter matches only http entries');
+    const toolOnly = await log.list({ source: 'tool' });
+    eq(toolOnly.entries.length, 2, 'source filter matches only tool entries');
+    same((await log.list({ source: 'nope' })).entries, [], 'unknown source filter is empty');
     const limited = await log.list({ limit: 2 });
     same(limited.entries.map((entry) => entry.id), [third.id, second.id], 'limit caps the page');
     eq(limited.nextId, second.id, 'nextId points at the page tail when more entries exist');

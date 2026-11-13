@@ -316,6 +316,40 @@ assert.equal(filtered.status, 200, 'filtered activity list responds 200');
 assert.ok(filtered.json.entries.every((entry) => entry.action === 'storage'), 'action filter only returns storage entries');
 console.log(`PASS activity log filter: ${filtered.json.entries.length} storage entries`);
 
+// Panel/user operations are journaled too (source http, tool panel).
+// Use the setup route: an unsupported action fails with a 400 immediately and
+// never touches the device, so this assertion is hermetic on any host (a wedged
+// or stopped guest must not turn the test into a timeout).
+const panelAttempt = await callRoute('/apk-vm/setup', {
+  method: 'POST',
+  url: '/apk-vm/setup',
+  body: { action: 'tool-core-unsupported-action' },
+});
+assert.equal(panelAttempt.status, 400, 'unsupported setup action responds 400');
+const userActivity = await callRoute('/apk-vm/activity', {
+  method: 'GET',
+  url: '/apk-vm/activity?source=http&limit=10',
+});
+assert.equal(userActivity.status, 200, 'source-filtered activity list responds 200');
+assert.ok(userActivity.json.entries.length >= 1, 'panel operations are journaled');
+const panelEntry = userActivity.json.entries.find(
+  (entry) => entry.action === 'setup' && /tool-core-unsupported-action/.test(String(entry.summary || '')),
+);
+assert.ok(panelEntry, 'panel setup attempt is recorded as action setup');
+assert.equal(panelEntry.source, 'http', 'panel operation is recorded with source http');
+assert.equal(panelEntry.tool, 'panel', 'panel operation is recorded with tool panel');
+assert.equal(panelEntry.ok, false, 'failed panel operation keeps ok:false');
+assert.match(String(panelEntry.error || ''), /unsupported setup action/i, 'failed panel operation keeps the HTTP error');
+const toolActivity = await callRoute('/apk-vm/activity', {
+  method: 'GET',
+  url: '/apk-vm/activity?source=tool&limit=10',
+});
+assert.ok(
+  toolActivity.json.entries.every((entry) => entry.source === 'tool'),
+  'source=tool filter returns only tool entries',
+);
+console.log(`PASS user activity: panel setup attempt recorded from the HTTP route (${panelEntry.ok ? 'ok' : 'failed'})`);
+
 const entryId = activityList.json.entries[0].id;
 const single = await callRoute('/apk-vm/activity', { method: 'GET', url: `/apk-vm/activity/${encodeURIComponent(entryId)}` });
 assert.equal(single.status, 200, 'activity entry route responds 200');

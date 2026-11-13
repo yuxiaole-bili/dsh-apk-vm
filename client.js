@@ -348,16 +348,16 @@ window.__ModuleLoader__.load({
       'setup.autoDisabled': 'Automatic setup is disabled; set up the environment manually.',
       'setup.java': 'Java (JDK 17+)',
       'setup.javaMissing': 'Java not found',
-      'activity.title': 'Agent activity',
+      'activity.title': 'Activity',
       'activity.count': '{count} events',
       'activity.refresh': 'Refresh',
       'activity.clear': 'Clear log',
-      'activity.clearConfirm': 'Clear all recorded agent activity? This cannot be undone.',
+      'activity.clearConfirm': 'Clear all recorded activity (Agent and user operations)? This cannot be undone.',
       'activity.cleared': 'Activity log cleared.',
       'activity.clearFailed': 'Could not clear the activity log.',
-      'activity.loadFailed': 'Could not load agent activity.',
+      'activity.loadFailed': 'Could not load activity.',
       'activity.unavailable': 'The activity log is not available yet; this panel works once the server routes are registered.',
-      'activity.empty': 'No agent activity recorded yet.',
+      'activity.empty': 'No activity recorded yet.',
       'activity.loading': 'Loading activity…',
       'activity.allInstances': 'All VMs',
       'activity.instanceOption': 'VM {id}',
@@ -376,6 +376,10 @@ window.__ModuleLoader__.load({
       'activity.instance': 'VM',
       'activity.tool': 'Tool',
       'activity.source': 'Source',
+      'activity.sourceTool': 'Agent',
+      'activity.sourceHttp': 'User',
+      'activity.sourceSystem': 'System',
+      'activity.allSources': 'All sources',
       'activity.duration': 'Duration',
       'activity.summary': 'Summary',
       'activity.error': 'Error',
@@ -712,16 +716,16 @@ window.__ModuleLoader__.load({
       'setup.autoDisabled': '自动安装已关闭，请手动配置环境。',
       'setup.java': 'Java（JDK 17+）',
       'setup.javaMissing': '未找到 Java',
-      'activity.title': 'Agent 活动',
+      'activity.title': '活动记录',
       'activity.count': '{count} 条记录',
       'activity.refresh': '刷新',
       'activity.clear': '清空记录',
-      'activity.clearConfirm': '清空所有已记录的 Agent 活动？此操作不可撤销。',
+      'activity.clearConfirm': '清空所有已记录的活动（Agent 和用户操作）？此操作不可撤销。',
       'activity.cleared': '活动记录已清空。',
       'activity.clearFailed': '清空活动记录失败。',
-      'activity.loadFailed': '加载 Agent 活动失败。',
+      'activity.loadFailed': '加载活动失败。',
       'activity.unavailable': '活动日志暂不可用；服务端路由注册后此面板即可使用。',
-      'activity.empty': '暂无 Agent 活动记录。',
+      'activity.empty': '暂无活动记录。',
       'activity.loading': '正在加载活动…',
       'activity.allInstances': '所有虚拟机',
       'activity.instanceOption': '虚拟机 {id}',
@@ -740,6 +744,10 @@ window.__ModuleLoader__.load({
       'activity.instance': '虚拟机',
       'activity.tool': '工具',
       'activity.source': '来源',
+      'activity.sourceTool': 'Agent',
+      'activity.sourceHttp': '用户',
+      'activity.sourceSystem': '系统',
+      'activity.allSources': '全部来源',
       'activity.duration': '耗时',
       'activity.summary': '摘要',
       'activity.error': '错误',
@@ -1541,6 +1549,10 @@ window.__ModuleLoader__.load({
         var actionPick = actionPickState[0];
         var setActionPick = actionPickState[1];
 
+        var sourcePickState = React.useState('');
+        var sourcePick = sourcePickState[0];
+        var setSourcePick = sourcePickState[1];
+
         var errorsOnlyState = React.useState(false);
         var errorsOnly = errorsOnlyState[0];
         var setErrorsOnly = errorsOnlyState[1];
@@ -1581,6 +1593,7 @@ window.__ModuleLoader__.load({
           var params = ['limit=60'];
           if (instancePick) params.push('instanceId=' + encodeURIComponent(instancePick));
           if (actionPick) params.push('action=' + encodeURIComponent(actionPick));
+          if (sourcePick) params.push('source=' + encodeURIComponent(sourcePick));
           if (errorsOnly) params.push('ok=false');
           if (beforeId) params.push('beforeId=' + encodeURIComponent(beforeId));
           requestJson('/apk-vm/activity?' + params.join('&'), { method: 'GET' }, T).then(function (response) {
@@ -1630,7 +1643,7 @@ window.__ModuleLoader__.load({
               if (typeof clearTimeout === 'function') clearTimeout(timer);
             };
           },
-          [open, panelVisible, instancePick, actionPick, errorsOnly, refreshTick]
+          [open, panelVisible, instancePick, actionPick, sourcePick, errorsOnly, refreshTick]
         );
 
         function refresh() {
@@ -1741,7 +1754,10 @@ window.__ModuleLoader__.load({
                 ),
                 renderDetailRow(T('activity.instance'), textValue(entry.instanceId) || 'default'),
                 renderDetailRow(T('activity.tool'), textValue(entry.tool) || '—'),
-                renderDetailRow(T('activity.source'), textValue(entry.source) || 'tool'),
+                renderDetailRow(
+                  T('activity.source'),
+                  sourceLabel(entry) + ' (' + (textValue(entry.source) || 'tool') + ')'
+                ),
                 renderDetailRow(T('activity.duration'), formatDuration(entry.durationMs) || '—'),
                 renderDetailRow(T('activity.summary'), textValue(entry.summary) || '—'),
                 errorText ? renderDetailRow(T('activity.error'), errorText, 'apkvm-activity-errtext') : null,
@@ -1757,6 +1773,13 @@ window.__ModuleLoader__.load({
               )
             )
           );
+        }
+
+        function sourceLabel(entry) {
+          var source = textValue(entry && entry.source) || 'tool';
+          if (source === 'http') return T('activity.sourceHttp');
+          if (source === 'system') return T('activity.sourceSystem');
+          return T('activity.sourceTool');
         }
 
         function renderRow(entry, index) {
@@ -1796,6 +1819,7 @@ window.__ModuleLoader__.load({
                 'span',
                 { className: 'apkvm-activity-meta' },
                 h('span', { className: 'apkvm-tag' + (isError ? '' : ' ok') }, textValue(entry.instanceId) || 'default'),
+                h('span', { className: 'apkvm-tag' + (isError ? '' : ' ok') }, sourceLabel(entry)),
                 entry.durationMs !== null && entry.durationMs !== undefined
                   ? h('span', { className: 'apkvm-dim' }, formatDuration(entry.durationMs))
                   : null,
@@ -1855,6 +1879,22 @@ window.__ModuleLoader__.load({
                   entry.id === 'default' ? T('instances.default') : entry.avdName || entry.id
                 );
               })
+            ),
+            h(
+              'select',
+              {
+                className: 'apkvm-activity-select',
+                value: sourcePick,
+                'aria-label': T('activity.source'),
+                title: T('activity.source'),
+                onChange: function (event) {
+                  setSourcePick(event && event.target ? String(event.target.value) : '');
+                },
+              },
+              h('option', { value: '' }, T('activity.allSources')),
+              h('option', { value: 'tool' }, T('activity.sourceTool')),
+              h('option', { value: 'http' }, T('activity.sourceHttp')),
+              h('option', { value: 'system' }, T('activity.sourceSystem'))
             ),
             h(
               'select',

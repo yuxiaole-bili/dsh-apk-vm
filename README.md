@@ -439,23 +439,26 @@ or `project`), session id, workspace, and `since` / `lastSeenAt` timestamps; lea
 
 ## Agent activity log
 
-Every `apk_vm` tool call is journaled locally, so you can see what an Agent actually did to the
-VM, when, and with what result. The panel adds a sidebar **Agent activity** card that renders the
-journal as a timeline.
+Every `apk_vm` tool call and every mutating panel/HTTP action (tap, swipe, typed text, install,
+snapshot save/load, debug shell, ...) is journaled locally, so you can see what an Agent — or a
+person clicking in the panel — actually did to the VM, when, and with what result. The panel adds
+a sidebar **Activity** card that renders the journal as a timeline.
 
 - Storage: `<profile>/.apk-vm/activity/activity.jsonl` plus `screenshots/<id>.png`; ring-pruned
   (1000 entries / 250 MB by default). `activityDir` overrides the location.
-- Each entry records `action`, `summary`, `ok` / `error`, `durationMs`, `instanceId`, a bounded
-  `argsPreview`, and an optional screenshot for mutating actions
-  (`tap`/`swipe`/`key`/`text`/`install`/`type_text`/…).
+- Each entry records `source` (`tool` for the agent tool, `http` for panel/API operations,
+  `system`), `tool` (`apk_vm`, `panel` or a client label), `action`, `summary`, `ok` / `error`,
+  `durationMs`, `instanceId`, a bounded `argsPreview`, and an optional screenshot for mutating
+  actions (`tap`/`swipe`/`key`/`text`/`install`/`type_text`/…).
 - HTTP (same origin, local only):
-  `GET /apk-vm/activity?limit=&beforeId=&action=&instanceId=&ok=` (newest first + `stats`),
+  `GET /apk-vm/activity?limit=&beforeId=&action=&instanceId=&source=&ok=` (newest first + `stats`),
   `GET /apk-vm/activity/<id>` (one entry), `GET /apk-vm/activity/<id>/shot` (PNG),
   `POST /apk-vm/activity/clear`.
-- The card filters by instance / action / errors only, lazy-loads thumbnails, opens a full-screen
+- The card filters by source (Agent/User) / instance / action / errors only, lazy-loads thumbnails, opens a full-screen
   overlay with metadata, auto-refreshes every 3 s while open and clears with a confirmation.
 - The journal is local-only and is never uploaded, but it can contain screen content and command
-  arguments — clear it before recording or sharing the panel.
+  arguments — clear it before recording or sharing the panel. Typed text is journaled as a
+  character count, not its content.
 
 A worked, dependency-free example is in [examples/agent-workflow.mjs](examples/agent-workflow.mjs): it drives state → install → UI tree → tap → assertion → screenshot and then prints the activity timeline the call just produced.
 

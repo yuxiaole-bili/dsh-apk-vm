@@ -7,9 +7,10 @@ HTTP routes as stable.
 
 ## Highlights
 
-- **Agent activity log (图形化工作日志).** Every `apk_vm` call is recorded locally: action,
+- **Agent activity log (图形化工作日志).** Every `apk_vm` call and every mutating panel
+  operation is recorded locally (entries carry `source: tool|http`): action,
   argument preview, result, error, duration, instance and a screenshot for mutating actions. The
-  sidebar **Agent activity** card shows a filterable timeline with thumbnails and a full-image
+  sidebar **Activity** card shows a filterable timeline (by source / instance / action) with thumbnails and a full-image
   overlay; the same data is available over HTTP (`GET /apk-vm/activity`,
   `GET /apk-vm/activity/<id>/shot`, `POST /apk-vm/activity/clear`). Journal entries and
   screenshots stay on the host and are never uploaded.
@@ -56,9 +57,9 @@ HTTP routes as stable.
 
 - Windows x64 and Linux x86_64 are the end-to-end verified platforms; macOS/Apple Silicon image
   selection is implemented but not yet verified end-to-end.
-- The activity journal records `apk_vm` tool calls; direct HTTP calls from scripts are not
-  journaled. Default caps: 1000 entries / 250 MB (`activityDir` changes the location; caps are
-  not configurable yet).
+- The activity journal records `apk_vm` tool calls and mutating panel/HTTP requests; read-only
+  requests are not journaled and typed text is stored as a character count only. Default caps:
+  1000 entries / 250 MB (`activityDir` changes the location; caps are not configurable yet).
 - Provisioning still needs a host hypervisor (AEHD/WHPX on Windows, KVM on Linux, Hypervisor
   Framework on macOS) — the plugin cannot install it.
 - No audio transport yet.

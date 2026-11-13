@@ -7,14 +7,15 @@ interactions, and a first-class zero-config provisioning chain.
 
 ### Added
 
-- **Agent activity log.** Every `apk_vm` tool call is journaled locally as JSONL under
-  `<profile>/.apk-vm/activity` (override with `activityDir`), with a screenshot attached to
-  mutating actions. New `GET /apk-vm/activity` (list + stats, filterable by action / instance /
-  result), `GET /apk-vm/activity/<id>`, `GET /apk-vm/activity/<id>/shot` and
-  `POST /apk-vm/activity/clear`. The sidebar gains an **Agent activity** timeline card with
+- **Agent activity log.** Every `apk_vm` tool call and every mutating panel/HTTP request is
+  journaled locally as JSONL under `<profile>/.apk-vm/activity` (override with `activityDir`);
+  entries carry `source: tool|http` and a screenshot is attached to mutating actions. New
+  `GET /apk-vm/activity` (list + stats, filterable by source / action / instance / result),
+  `GET /apk-vm/activity/<id>`, `GET /apk-vm/activity/<id>/shot` and
+  `POST /apk-vm/activity/clear`. The sidebar gains an **Activity** timeline card with
   filters, lazy thumbnails, a full-image overlay and confirm-to-clear. Journal and screenshots
-  stay on this host; nothing is uploaded. New `lib/activity-log.js` (ring-pruned at 1000
-  entries / 250 MB by default).
+  stay on this host; nothing is uploaded (typed text is stored as a character count, not its
+  content). New `lib/activity-log.js` (ring-pruned at 1000 entries / 250 MB by default).
 - **Device resilience and recovery** in `lib/android.js`: bounded-budget `screenshot()` with
   health probes and structured error codes (`EDEVICE_UNRESPONSIVE`, `ESYSTEM_SERVER_DEAD`,
   `ESURFACEFLINGER_DEAD`, `ESCREENSHOT_TIMEOUT`, …) plus opt-in one-shot reconnect/reboot

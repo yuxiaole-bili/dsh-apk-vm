@@ -78,6 +78,12 @@ function isReady(vm) {
 
 function sendJson(res, status, body) {
   const text = JSON.stringify(body);
+  // Request-level activity logging reads ok/error from the final payload.
+  try {
+    res._apkvmResponseBody = body;
+  } catch {
+    /* ignore */
+  }
   res.writeHead(status, {
     'Content-Type': 'application/json; charset=utf-8',
     'Cache-Control': 'no-store',
@@ -88,7 +94,14 @@ function sendJson(res, status, body) {
 }
 
 function sendError(res, status, message) {
-  sendJson(res, status, { ok: false, error: String(message || 'unknown error') });
+  const text = String(message || 'unknown error');
+  // Request-level activity logging attaches this message to a failed entry.
+  try {
+    res._apkvmErrorMessage = text;
+  } catch {
+    /* ignore */
+  }
+  sendJson(res, status, { ok: false, error: text });
 }
 
 function readJsonBody(req) {
@@ -107,6 +120,7 @@ function readJsonBody(req) {
     req.on('end', () => {
       const raw = Buffer.concat(chunks).toString('utf8').trim();
       if (!raw) {
+        req._apkvmJsonBody = {};
         resolve({});
         return;
       }
@@ -116,6 +130,7 @@ function readJsonBody(req) {
           reject(new Error('request body must be a JSON object'));
           return;
         }
+        req._apkvmJsonBody = parsed;
         resolve(parsed);
       } catch (error) {
         reject(new Error(`invalid JSON body: ${error.message}`));
@@ -1112,15 +1127,26 @@ export function apply(ctx, config = {}) {
       serverOrigin = null;
     }
     const disposers = [];
-    const wrapHandler = (handler) => async (req, res) => {
+    const wrapHandler = (handler, describeActivity) => async (req, res) => {
       if (!isSameOrigin(req)) {
         sendError(res, 403, 'cross-origin request rejected');
         return;
       }
+      const record = describeActivity && req.method === 'POST' ? describeActivity : null;
+      const startedAt = record ? Date.now() : 0;
+      let failure = null;
       try {
         await handler(req, res);
       } catch (error) {
+        failure = error;
         sendError(res, 500, error && error.message ? error.message : error);
+      }
+      if (record) {
+        try {
+          await recordUserActivity(describeActivity(req), req, res, startedAt, failure);
+        } catch {
+          /* activity logging must never break a request */
+        }
       }
     };
     // HTTP callers identify themselves with x-apk-vm-owner/scope/session/
@@ -1211,7 +1237,282 @@ export function apply(ctx, config = {}) {
       return true;
     }
 
+    // Mutating panel/HTTP routes whose requests are journaled as user activity.
+    // Read-only routes (state/frame/screenshots/...) stay out of the journal.
+    const USER_ACTIVITY_PATHS = new Set([
+      '/apk-vm/controls',
+      '/apk-vm/skills',
+      '/apk-vm/flows',
+      '/apk-vm/ui-test',
+      '/apk-vm/setup',
+      '/apk-vm/ownership',
+      '/apk-vm/instances',
+      '/apk-vm/avds',
+      '/apk-vm/avd',
+      '/apk-vm/devices',
+      '/apk-vm/device',
+      '/apk-vm/remote',
+      '/apk-vm/vm',
+      '/apk-vm/install',
+      '/apk-vm/upload',
+      '/apk-vm/input',
+      '/apk-vm/touch',
+      '/apk-vm/clipboard',
+      '/apk-vm/stream',
+      '/apk-vm/stream/quality',
+      '/apk-vm/debug/env',
+      '/apk-vm/debug/shell',
+      '/apk-vm/debug/prop',
+      '/apk-vm/debug/push',
+      '/apk-vm/debug/pull',
+      '/apk-vm/debug/reboot',
+      '/apk-vm/debug/action',
+      '/apk-vm/snapshots',
+      '/apk-vm/debug/rotate',
+      '/apk-vm/debug/proxy',
+      '/apk-vm/debug/ca',
+      '/apk-vm/network/har',
+      '/apk-vm/network',
+      '/apk-vm/network/pcap',
+      '/apk-vm/debug/record',
+      '/apk-vm/apks',
+    ]);
+
+    function activityText(value, max) {
+      const text = value == null ? '' : String(value);
+      return text.length > max ? `${text.slice(0, Math.max(1, max - 1))}…` : text;
+    }
+
+    function activityNumber(value) {
+      const number = Number(value);
+      return Number.isFinite(number) ? String(Math.round(number * 100) / 100) : '?';
+    }
+
+    function httpActivityTool(req) {
+      let tool = 'panel';
+      try {
+        const owner = httpOwnerFromRequest(req);
+        if (owner) {
+          tool = String(owner.label || owner.session || owner.key || owner.owner || 'http-client');
+        }
+      } catch {
+        /* ignore */
+      }
+      return tool.slice(0, 80);
+    }
+
+    // One mutating HTTP request -> one journal entry. Everything is
+    // best-effort: unknown routes fall back to a generic label.
+    function userActivitySpec(pathname, req, body, query, instanceId) {
+      const b = body && typeof body === 'object' ? body : {};
+      const key =
+        String(pathname || '')
+          .replace(/^\/apk-vm\/instances\/[^/]+/, '')
+          .replace(/^\/apk-vm/, '') || '/';
+      let action = 'http';
+      let summary = `${String((req && req.method) || 'POST')} ${pathname}`;
+      let shotAction = null;
+      let argsPreview = null;
+      if (key === '/input') {
+        const type = String(b.type || b.action || 'input').toLowerCase();
+        if (type === 'tap') {
+          action = 'tap';
+          summary = `tap (${activityNumber(b.x)}, ${activityNumber(b.y)})`;
+          shotAction = 'tap';
+        } else if (type === 'swipe') {
+          action = 'swipe';
+          summary = `swipe (${activityNumber(b.x1)}, ${activityNumber(b.y1)}) -> (${activityNumber(b.x2)}, ${activityNumber(b.y2)})`;
+          shotAction = 'swipe';
+        } else if (type === 'long_press') {
+          action = 'long_press';
+          summary = `long press (${activityNumber(b.x)}, ${activityNumber(b.y)})`;
+          shotAction = 'long_press';
+        } else if (type === 'key') {
+          action = 'key';
+          summary = `key ${activityText(b.key, 60)}`;
+          shotAction = 'key';
+        } else if (type === 'text') {
+          action = 'text';
+          // Never journal the raw text: password fields and personal data would
+          // otherwise leak into the local journal. Record only its length.
+          const typedLength = String(b.text == null ? '' : b.text).length;
+          summary = `type ${typedLength} char${typedLength === 1 ? '' : 's'}`;
+          shotAction = 'text';
+          argsPreview = JSON.stringify({ type: 'text', text: `<${typedLength} chars>` });
+        } else {
+          action = 'input';
+          summary = `input ${type}`;
+        }
+      } else if (key === '/touch') {
+        action = 'touch';
+        summary = `touch ${activityText(b.action, 20)} (${activityNumber(b.x)}, ${activityNumber(b.y)})`;
+      } else if (key === '/clipboard') {
+        action = 'clipboard';
+        const text = String(b.text == null ? '' : b.text);
+        summary = text ? `set clipboard (${text.length} chars)` : 'clipboard request';
+      } else if (key === '/vm') {
+        action = 'vm';
+        summary = `VM ${activityText(b.action, 30) || 'request'}`;
+      } else if (key === '/install') {
+        action = 'install';
+        summary = `install ${activityText(String(b.path || '').split(/[\\/]/).pop(), 100) || 'APK'}`;
+        shotAction = 'install';
+      } else if (key === '/upload') {
+        action = 'install';
+        const length = Number((req && req.headers && req.headers['content-length']) || 0);
+        summary = `upload APK${length > 0 ? ` (${Math.round(length / 1024)} KB)` : ''}`;
+        shotAction = 'install';
+      } else if (key === '/setup') {
+        action = 'setup';
+        summary = `setup ${activityText(b.action, 40) || 'refresh'}`;
+      } else if (key === '/snapshots') {
+        action = 'snapshot';
+        const name = activityText(b.name, 60);
+        summary = `snapshot ${activityText(b.action, 20) || 'save'}${name ? ` ${name}` : ''}`;
+      } else if (key === '/network' || key === '/network/har' || key === '/network/pcap') {
+        action = key === '/network' ? 'network' : key === '/network/har' ? 'network.har' : 'network.pcap';
+        summary = `${action.replace('network.', '')} ${activityText(b.action, 30) || 'request'}`.trim();
+      } else if (key === '/debug/shell') {
+        action = 'shell';
+        summary = `shell ${activityText(b.command || b.cmd, 90)}`;
+      } else if (key === '/debug/prop') {
+        action = 'prop';
+        summary = `prop ${activityText(b.name, 60)}${b.value !== undefined ? ` = ${activityText(b.value, 60)}` : ''}`;
+      } else if (key === '/debug/push' || key === '/debug/pull') {
+        action = key === '/debug/push' ? 'push' : 'pull';
+        const local = activityText(b.local || b.path, 80);
+        const remote = activityText(b.remote, 80);
+        summary = key === '/debug/pull' ? `pull ${remote} -> ${local}` : `push ${local} -> ${remote}`;
+      } else if (key === '/debug/reboot') {
+        action = 'reboot';
+        summary = `reboot ${activityText(b.mode || '', 20)}`.trim();
+      } else if (key === '/debug/rotate') {
+        action = 'rotate';
+        summary = `rotate ${activityText(b.mode || b.orientation, 30)}`;
+      } else if (key === '/debug/proxy') {
+        action = 'proxy';
+        summary = b.host ? `proxy ${activityText(b.host, 60)}${b.port ? `:${activityText(b.port, 10)}` : ''}` : 'proxy change';
+      } else if (key === '/debug/ca') {
+        action = 'install_ca';
+        summary = 'install CA certificate';
+      } else if (key === '/debug/record') {
+        action = 'record';
+        summary = `record ${activityText(b.seconds, 10)}s`;
+      } else if (key === '/debug/action' || key === '/debug/env') {
+        action = 'debug';
+        summary = `debug ${activityText(b.action, 40)}`;
+      } else if (key === '/controls') {
+        action = 'control';
+        summary = `control ${activityText(b.action, 40)}`;
+      } else if (key === '/skills') {
+        action = 'skill';
+        summary = `skill ${activityText(b.action, 30)} ${activityText(b.skillId || b.name, 60)}`.trim();
+      } else if (key === '/flows') {
+        action = 'flow';
+        summary = `flow ${activityText(b.action, 30)} ${activityText(b.flowId || b.name, 60)}`.trim();
+      } else if (key === '/ui-test') {
+        action = 'ui_test';
+        summary = `UI test ${activityText(b.name || b.action, 60)}`.trim();
+      } else if (key === '/device') {
+        action = 'device';
+        summary = `device ${activityText(b.action, 30)} ${activityText(b.serial, 80)}`.trim();
+      } else if (key === '/remote') {
+        action = 'remote';
+        summary = `remote ${activityText(b.action, 30)}`;
+      } else if (key === '/ownership') {
+        action = 'ownership';
+        summary = `ownership ${activityText(b.action, 30)}`;
+      } else if (key === '/instances') {
+        action = 'instances';
+        summary = `instances ${activityText(b.action, 30)} ${activityText(b.id || b.avdName, 60)}`.trim();
+      } else if (key === '/avd' || key === '/avds') {
+        action = 'avd';
+        summary = `avd ${activityText(b.action, 30)} ${activityText(b.name || b.avdName, 60)}`.trim();
+      } else if (key === '/stream' || key === '/stream/quality') {
+        action = 'stream';
+        summary = `stream ${activityText(b.action || b.quality, 30)}`.trim();
+      }
+      if (!argsPreview) {
+        try {
+          const text = JSON.stringify(b);
+          argsPreview = text.length > 700 ? `${text.slice(0, 700)}…` : text;
+        } catch {
+          argsPreview = null;
+        }
+      }
+      return {
+        action,
+        summary,
+        tool: httpActivityTool(req),
+        instanceId: instanceId || 'default',
+        argsPreview,
+        shotAction: shotAction && ACTIVITY_SHOT_ACTIONS.has(shotAction) ? shotAction : null,
+      };
+    }
+
+    async function captureActivityShotBound(spec) {
+      let timer = null;
+      try {
+        const shot = await Promise.race([
+          captureActivityShot({ instance: spec && spec.instanceId }),
+          new Promise((resolve) => {
+            timer = setTimeout(() => resolve(null), 3000);
+          }),
+        ]);
+        return shot || null;
+      } catch {
+        return null;
+      } finally {
+        if (timer) clearTimeout(timer);
+      }
+    }
+
+    async function recordUserActivity(spec, req, res, startedAt, failure) {
+      try {
+        const specSafe = spec && typeof spec === 'object' ? spec : {};
+        const status = Number(res && res.statusCode) || 200;
+        const responseBody = res && res._apkvmResponseBody;
+        const responseOk = !(
+          responseBody &&
+          typeof responseBody === 'object' &&
+          responseBody.ok === false
+        );
+        const ok = !failure && status < 400 && responseOk;
+        const error = ok
+          ? null
+          : String(
+              (failure && (failure.message || failure)) ||
+                (res && res._apkvmErrorMessage) ||
+                (responseBody && typeof responseBody === 'object' && responseBody.error) ||
+                `HTTP ${status}`,
+            );
+        let shot = null;
+        // Screenshots are nice-to-have: cap the wait so a wedged guest can
+        // never delay the request path (that is the 1.0.0 bug class).
+        if (ok && specSafe.shotAction) {
+          shot = await captureActivityShotBound(specSafe);
+        }
+        await activityLog.record({
+          action: String(specSafe.action || 'http').slice(0, 100),
+          source: 'http',
+          tool: String(specSafe.tool || 'panel').slice(0, 100),
+          instanceId: String(specSafe.instanceId || 'default'),
+          summary: String(specSafe.summary || '').slice(0, 500),
+          ok,
+          error: error ? error.slice(0, 800) : null,
+          durationMs: Math.max(0, Date.now() - startedAt),
+          argsPreview: specSafe.argsPreview || null,
+          shot: shot || undefined,
+        });
+      } catch {
+        /* activity logging must never break a request */
+      }
+    }
+
     const register = (pathname, handler) => {
+      const describeActivity = USER_ACTIVITY_PATHS.has(pathname)
+        ? (req) => userActivitySpec(pathname, req, req._apkvmJsonBody || {}, requestQuery(req), 'default')
+        : null;
       disposers.push(
         webServer.register({
           kind: 'exact',
@@ -1221,10 +1522,11 @@ export function apply(ctx, config = {}) {
               return;
             }
             await handler(req, res);
-          }),
+          }, describeActivity),
         }),
       );
     };
+
 
     async function handleFlowRequest(req, res, instanceId, inputFn) {
       if (req.method === 'GET') {
@@ -2378,7 +2680,17 @@ export function apply(ctx, config = {}) {
           webServer.register({
             kind: 'exact',
             path: pathname,
-            handler: wrapHandler((req, res) => handleExtraRequest(req, res, id, suffix)),
+            handler: wrapHandler(
+              (req, res) => handleExtraRequest(req, res, id, suffix),
+              (req) =>
+                userActivitySpec(
+                  suffix ? `/apk-vm/${suffix}` : '/apk-vm/state',
+                  req,
+                  req._apkvmJsonBody || {},
+                  requestQuery(req),
+                  id,
+                ),
+            ),
           }),
         );
       }
@@ -2512,6 +2824,7 @@ export function apply(ctx, config = {}) {
                 beforeId: query.get('beforeId') || undefined,
                 action: query.get('action') || undefined,
                 instanceId: query.get('instanceId') || undefined,
+                source: query.get('source') || undefined,
                 ok:
                   okParam === null || okParam === ''
                     ? undefined
