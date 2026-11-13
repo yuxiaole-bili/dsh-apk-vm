@@ -1,5 +1,40 @@
 # Changelog
 
+## 0.12.0
+
+WebView read-out and remembered-APK release: `webviewAction=eval` now returns real values, and
+APKs installed through the plugin survive a guest reset.
+
+### Added
+
+- **JSON-safe `webviewAction=eval`.** The CDP evaluation path now returns `result.value` for
+  ordinary JSON values and, for objects that do not survive JSON by value (`DOMRect`,
+  `MediaQueryList`, class instances), a JSON-safe property snapshot built from own properties and
+  prototype getters. A compact preview of the value is appended to the tool summary, so reading
+  `getBoundingClientRect().width` or `matchMedia("(pointer: coarse)").matches` no longer needs a
+  screenshot. Statement blocks fall back to plain CDP evaluation (no property snapshot; the
+  result is whatever the runtime returns, often `null`). New helpers
+  `isSingleJsExpression`, `jsonSafeEvaluateExpression`, `previewJsValue` and
+  `CdpSession.evaluateJson`; covered by five new cases in `spike/cdp-test.mjs` (17 total).
+- **Remembered APKs / auto-reinstall.** Installs through the tool or the panel are recorded in
+  `<profile>/.apk-vm/installed-apps.json`; uploaded APKs are archived under
+  `<profile>/.apk-vm/apks` (newest 10). When the guest no longer has a remembered package (after a
+  quick-boot snapshot reset, an AVD recreation or a plugin/emulator upgrade), the plugin
+  re-installs it on the next boot and journals the pass as a `source: system` activity entry.
+  Config: `autoReinstall` (default `true`). New `lib/installed-apps.js` and
+  `spike/installed-apps-test.mjs` (9 hermetic checks).
+
+### Changed
+
+- `webviewAction=eval` now accepts a single expression and reports the value; the old
+  statement-style fallback is unchanged.
+- Multi-instance installs (HTTP and tool) also remember the APK under that instance id.
+
+### Fixed
+
+- `webviewAction=eval` returned `null` for `DOMRect`/`MediaQueryList` and other non-by-value
+  values; it now returns a readable snapshot.
+
 ## 1.0.0
 
 Observability and reliability release: a local Agent activity journal, hardened device

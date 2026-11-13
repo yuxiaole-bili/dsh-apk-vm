@@ -6,8 +6,11 @@ import {
   CdpBridge,
   CdpSession,
   deepQuerySelector,
+  isSingleJsExpression,
+  jsonSafeEvaluateExpression,
   normalizeSelector,
   parseForwardPort,
+  previewJsValue,
 } from '../lib/cdp.js';
 import { losslessJson } from '../lib/json-safe.js';
 import { annotateScreenshot, encodePng } from '../lib/png-annotate.js';
@@ -381,4 +384,132 @@ test('PNG annotation draws node boxes and round-trips pixels', () => {
   const border = (2 * width + 3) * 4;
   assert.ok(decoded.pixels[border + 3] > 0);
 });
+
+test('isSingleJsExpression accepts reads and rejects statement programs', () => {
+  assert.equal(isSingleJsExpression('document.title'), true);
+  assert.equal(isSingleJsExpression('document.title;'), true);
+  assert.equal(isSingleJsExpression('matchMedia("(pointer: coarse)").matches'), true);
+  assert.equal(isSingleJsExpression('(() => { const r = document.body.getBoundingClientRect(); return r.width; })()'), true);
+  assert.equal(isSingleJsExpression('JSON.stringify([1, 2, 3])'), true);
+  assert.equal(isSingleJsExpression('const x = 1; x + 2'), false);
+  assert.equal(isSingleJsExpression('if (document.body) 1'), false);
+  assert.equal(isSingleJsExpression('a(); b()'), false);
+  assert.equal(isSingleJsExpression(''), false);
+  assert.equal(isSingleJsExpression(null), false);
+});
+
+test('jsonSafeEvaluateExpression wraps expressions and expands non-by-value results', () => {
+  assert.equal(jsonSafeEvaluateExpression('const x = 1; x'), null);
+  const wrapped = jsonSafeEvaluateExpression('document.querySelector("#file").getBoundingClientRect()');
+  assert.match(wrapped, /__dshKind/);
+  assert.match(wrapped, /getBoundingClientRect/);
+  assert.match(wrapped, /JSON\.stringify/);
+  assert.match(wrapped, /getOwnPropertyNames/);
+});
+
+test('previewJsValue produces compact single-line previews', () => {
+  assert.equal(previewJsValue(null), 'null');
+  assert.equal(previewJsValue(undefined), 'undefined');
+  assert.equal(previewJsValue(false), 'false');
+  assert.equal(previewJsValue({ matches: false }), '{"matches":false}');
+  const long = previewJsValue({ text: 'x'.repeat(500) }, 40);
+  assert.ok(long.length <= 40);
+  assert.match(long, /\.\.\.$/);
+  assert.equal(previewJsValue('a\nb'), '"a\\nb"');
+});
+
+test('CdpSession.evaluateJson converts DOMRect/MediaQueryList-style values', async (t) => {
+  const socket = new FakeSocket();
+  const session = new CdpSession(socket, {}, { timeoutMs: 500 });
+  t.after(() => session.close());
+
+  const rect = session.evaluateJson('document.querySelector("#card").getBoundingClientRect()');
+  await waitForSent(socket, 1);
+  assert.equal(socket.sent[0].method, 'Runtime.evaluate');
+  assert.match(socket.sent[0].params.expression, /__dshKind/);
+  assert.match(socket.sent[0].params.expression, /getBoundingClientRect/);
+  assert.equal(socket.sent[0].params.awaitPromise, true);
+  assert.equal(socket.sent[0].params.returnByValue, true);
+  socket.reply(socket.sent[0].id, {
+    result: {
+      type: 'object',
+      value: {
+        __dshKind: 'props',
+        __dshType: '[object DOMRect]',
+        __dshProps: { x: 12, y: 34, width: 100, height: 48, top: 34, left: 12 },
+      },
+    },
+  });
+  assert.deepEqual(await rect, {
+    __type: '[object DOMRect]', x: 12, y: 34, width: 100, height: 48, top: 34, left: 12,
+  });
+
+  const media = session.evaluateJson('matchMedia("(pointer: coarse)")');
+  await waitForSent(socket, 2);
+  socket.reply(socket.sent[1].id, {
+    result: {
+      type: 'object',
+      value: {
+        __dshKind: 'props',
+        __dshType: '[object MediaQueryList]',
+        __dshProps: { matches: false, media: '(pointer: coarse)' },
+      },
+    },
+  });
+  assert.deepEqual(await media, {
+    __type: '[object MediaQueryList]', matches: false, media: '(pointer: coarse)',
+  });
+
+  const json = session.evaluateJson('({ ready: true, count: 3 })');
+  await waitForSent(socket, 3);
+  socket.reply(socket.sent[2].id, {
+    result: { type: 'object', value: { __dshKind: 'json', __dshJson: '{"ready":true,"count":3}' } },
+  });
+  assert.deepEqual(await json, { ready: true, count: 3 });
+
+  const errors = session.evaluateJson('window.__missing.value');
+  await waitForSent(socket, 4);
+  socket.reply(socket.sent[3].id, {
+    result: {
+      type: 'object',
+      value: { __dshKind: 'error', __dshError: 'Cannot read properties of undefined (reading value)' },
+    },
+  });
+  await assert.rejects(errors, (error) => {
+    assert.equal(error.code, 'CDP_EVALUATION_ERROR');
+    assert.match(error.message, /Cannot read properties/);
+    return true;
+  });
+});
+
+test('CdpSession.evaluateJson falls back to plain evaluate for statements', async (t) => {
+  const socket = new FakeSocket();
+  const session = new CdpSession(socket, {}, { timeoutMs: 500 });
+  t.after(() => session.close());
+
+  const statements = session.evaluateJson('const x = 1; x + 2');
+  await waitForSent(socket, 1);
+  assert.equal(socket.sent[0].method, 'Runtime.evaluate');
+  assert.doesNotMatch(socket.sent[0].params.expression, /__dshKind/);
+  socket.reply(socket.sent[0].id, { result: { type: 'number', value: 3 } });
+  assert.equal(await statements, 3);
+});
+
+test('CdpSession.evaluateJson retries plain evaluate when the wrapper is a syntax error', async (t) => {
+  const socket = new FakeSocket();
+  const session = new CdpSession(socket, {}, { timeoutMs: 500 });
+  t.after(() => session.close());
+
+  const retried = session.evaluateJson('a?.b');
+  await waitForSent(socket, 1);
+  socket.reply(socket.sent[0].id, {
+    result: { type: 'object' },
+    exceptionDetails: { text: 'SyntaxError: unexpected token' },
+  });
+  await waitForSent(socket, 2);
+  assert.doesNotMatch(socket.sent[1].params.expression, /__dshKind/);
+  socket.reply(socket.sent[1].id, { result: { type: 'string', value: 'ok' } });
+  assert.equal(await retried, 'ok');
+});
+
 

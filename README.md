@@ -45,7 +45,7 @@ same-origin, loopback-only debug HTTP API and an `apk_vm` Agent tool.
 > 当前 **Windows x64 与 Linux x86_64（headless）为端到端已验证平台**；macOS 仅做探测/CI
 > 覆盖，详见 `docs/LINUX-E2E.md`。
 
-**Status:** `1.0.0` · Apache-2.0 · no npm runtime dependencies · no build step.
+**Status:** `0.12.0` · Apache-2.0 · no npm runtime dependencies · no build step.
 
 This is an open-source DSH plugin published on npm as **`dsh-apk-vm`**. Repository:
 [github.com/yuxiaole-bili/dsh-apk-vm](https://github.com/yuxiaole-bili/dsh-apk-vm).
@@ -227,6 +227,13 @@ key {"text":"HOME"}       -> returned to launcher
 - **Installed-app management.** The panel's **Installed apps** card lists third-party packages
   for the active instance and offers force-stop, clear-data and uninstall; it uses the same
   rooted `debug/packages` + `debug/action` API as the Agent tool.
+- **Remembered APKs and auto-reinstall.** APKs installed through the panel or the tool are
+  remembered in `<profile>/.apk-vm/installed-apps.json` (path, package, label, launch activity,
+  instance). When a quick-boot snapshot reset, a recreated AVD or a plugin/emulator upgrade leaves
+  the guest without one of those packages, the plugin reinstalls it automatically on the next boot
+  (`autoReinstall: true`, default) and records the pass in the activity journal. Uploaded APKs are
+  archived under `<profile>/.apk-vm/apks` (newest 10) so the reinstall does not depend on the
+  original temp file.
 - **Agent activity log (图形化工作日志).** Every `apk_vm` tool call is journaled locally — action,
   bounded argument preview, result, error, duration, instance, and an optional screenshot for
   mutating actions. The sidebar **Agent activity** card renders it as a filterable timeline with
@@ -309,7 +316,14 @@ to the running WebView: it discovers `webview_devtools_remote` sockets, forwards
   `tap_selector`, `tap_css`, `type_text`, `wait_for`.
 - `webviewAction=list` returns sanitized target metadata (`id`, `title`, `url`, `type`), never a
   DevTools WebSocket URL or token. Select a target with `targetId` or `webviewTarget`.
-- `webviewAction=eval` evaluates a JSON-returning expression; `click` and `wait_for` accept
+- `webviewAction=eval` evaluates a single JavaScript expression and returns `result.value` plus a
+  compact preview in `summary`. JSON values come back as-is; values that do not survive
+  `JSON.stringify` by value (`DOMRect`, `MediaQueryList`, other objects) come back as a JSON-safe
+  property snapshot, so `document.querySelector("#x").getBoundingClientRect().width` and
+  `matchMedia("(pointer: coarse)").matches` read correctly instead of returning `null`. Statement
+  blocks fall back to plain CDP evaluation (no property snapshot; the result is whatever the
+  runtime returns, often `null`); wrap a sequence in an expression instead: `(() => { const r = document.querySelector("#x").getBoundingClientRect(); return { width: r.width, height: r.height }; })()`.
+- `click` and `wait_for` accept
   ordinary CSS and `testid:VALUE` (which maps to `[data-testid="VALUE"]`). **Open** shadow roots
   are traversed; closed shadow roots and iframes are not.
 - `tap_selector` uses the same deep query and clicks through CDP. `tap_css` is for canvas or
@@ -324,6 +338,8 @@ Example Agent sequence for a hybrid App:
 
 ```text
 apk_vm { action: "webview", webviewAction: "list" }
+apk_vm { action: "webview", webviewAction: "eval", script: "matchMedia('(pointer: coarse)').matches" }
+apk_vm { action: "webview", webviewAction: "eval", script: "document.querySelector('#file-card').getBoundingClientRect()" }
 apk_vm { action: "webview", webviewAction: "click", selector: "testid:login" }
 apk_vm { action: "type_text", text: "中文角色名" }
 apk_vm { action: "wait_for", selector: "[data-testid=home]" }
@@ -724,6 +740,7 @@ All keys are optional; defaults are shown in the **Default** column.
 | `prewarm` | `false` | Boot the VM in the background shortly after plugin activation. |
 | `prewarmDelayMs` | `3000` | Delay before the prewarm start. |
 | `autoStart` | `true` | Start the VM on the first `/apk-vm/state` or `/apk-vm/frame` request. |
+| `autoReinstall` | `true` | Remember APKs installed through the plugin and reinstall missing ones on the next boot (registry in `<profile>/.apk-vm/installed-apps.json`, archived APKs in `<profile>/.apk-vm/apks`). Set `false` to opt out. |
 | `multiInstance` | `true` | Allow isolated extra VMs for concurrent Agents. |
 | `maxInstances` | `3` | Maximum number of extra instances (in addition to the default VM). Each running instance costs guest RAM/CPU. |
 | `instanceIdleMs` | `900000` | Stop an extra instance after this long without panel frames, a video client, or an Agent command (AVD is kept). |
@@ -785,7 +802,8 @@ and `{ action: "cancel-auto-setup" }` cancels it.
 | --- | --- | --- |
 | VM | AOSP Android Emulator (`emulator` + `system-images;android-34;default;x86_64`) | Boots the open-source Android system image; driven through adb. |
 | Setup | [lib/setup.js](lib/setup.js), [lib/jdk.js](lib/jdk.js), [lib/autosetup.js](lib/autosetup.js) | Dependency-free SDK / adb / emulator / AVD / acceleration detection plus one-click `create-avd` and optional `install-image`; `lib/jdk.js` provisions a managed Temurin JDK 17 and `lib/autosetup.js` runs the first-use auto-provisioning chain. |
-| Journal | [lib/activity-log.js](lib/activity-log.js) | Records every `apk_vm` tool call (action, argument preview, result/error, duration, instance, screenshot for mutating actions) as local JSONL + PNGs; backs the panel timeline and the `/apk-vm/activity` routes. |
+| Journal | [lib/activity-log.js](lib/activity-log.js) | Records every `apk_vm` tool call and every mutating panel/HTTP request (`source: tool|http|system`; action, argument preview, result/error, duration, instance, screenshot for mutating actions) as local JSONL + PNGs; backs the panel timeline and the `/apk-vm/activity` routes. |
+| Installed apps | [lib/installed-apps.js](lib/installed-apps.js) | Persists APKs installed through the plugin (`<profile>/.apk-vm/installed-apps.json`, archived copies under `<profile>/.apk-vm/apks`) and re-installs missing packages on the next boot (`autoReinstall`). |
 | Streaming | scrcpy 5.0.1 server (`lib/vendor/scrcpy-server-v5.0.1.jar`, pushed to `/data/local/tmp/scrcpy-server.jar`) + [lib/scrcpy.js](lib/scrcpy.js) | H.264 screen capture and the scrcpy control protocol, without the desktop scrcpy client. |
 | Device bridge | `adb` from Android SDK platform-tools | install / launch / screencap / input / logcat / file push-pull. |
 | Plugin runtime | DSH plugin APIs (`slots`, `locale`, `webServer`, `tools`, `dsh.client`) | Sidebar entry, main panel, same-origin HTTP/WebSocket control plane, agent tool. |
@@ -1060,6 +1078,8 @@ for f in lib/*.js; do node --check "$f"; done
 node spike/ui-smoke.cjs
 node spike/ui-better-sidebar-smoke.cjs
 node spike/setup-smoke.mjs
+node spike/cdp-test.mjs
+node spike/installed-apps-test.mjs
 node spike/android/mock-device.mjs
 node spike/android/launch-plan.mjs
 ```
@@ -1189,6 +1209,29 @@ updating.
 - Chinese `text` injection can succeed on the input channel but not reach a WebView field; the
   text path now verifies the field and falls back to a clipboard/`input text` style delivery,
   reporting which method worked.
+
+### Panel / WebView testing from a phone
+
+Driving the panel and a hybrid App from a phone surfaces a few coordinate and lifecycle pitfalls:
+
+- **Coordinates are physical pixels.** The panel streams a 720×1280 screen and `tap`/`swipe`
+  take device pixels, while `getBoundingClientRect()` inside the WebView returns CSS pixels at
+  the page's device pixel ratio (2 on the default AVD). Convert with `info.coordinateMap`:
+  `device = round(css * dpr) + offset`. Prefer `tap_css` / `tap_selector` (both CDP-based) for
+  DOM UI instead of converting by hand; `tap_css` is for canvas / non-DOM UI.
+- **Pin the instance.** When more than one VM exists, pass `instance: "default"` (or the id you
+  own) on every `apk_vm` call so a start or install never lands on a clean extra instance.
+- **`webviewAction=eval` now returns values**, including non-JSON-by-value objects (`DOMRect`,
+  `MediaQueryList`) via a property snapshot — see
+  [WebView and Chrome DevTools Protocol](#webview-and-chrome-devtools-protocol).
+- **The soft keyboard moves the layout.** Typing raises the keyboard and pans the page, so a
+  second `tap` can land on the previous field and concatenate account/password. Send `BACK` after
+  each field before tapping the next one, or use `insert_text` / `type_text` with a selector.
+- **A wedged emulator can make the guest look reset.** If `screencap` hangs and the state flips to
+  `starting`, stop/start the instance or `apk_vm reboot`. Installed APKs are remembered and
+  re-installed after a quick-boot reset (`autoReinstall`, default on), but Android-side login state
+  is app data: `clear_data` wipes it. The 180 s screenshot timeout and the `adb` action error are
+  fixed in 1.0.0 (see the earlier sections).
 
 ### The guest loses its network after switching to shared mode
 
@@ -1360,6 +1403,8 @@ for f in lib/*.js; do node --check "$f"; done
 node spike/ui-smoke.cjs
 node spike/ui-better-sidebar-smoke.cjs
 node spike/setup-smoke.mjs
+node spike/cdp-test.mjs
+node spike/installed-apps-test.mjs
 node spike/android/mock-device.mjs
 node spike/android/launch-plan.mjs
 node spike/instances-smoke.mjs

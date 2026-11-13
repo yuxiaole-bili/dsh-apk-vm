@@ -30,6 +30,11 @@ reporting, advertising or a remote backend.
   default) and can be cleared from the panel or with `POST /apk-vm/activity/clear`.
   Because entries can contain screen content and command arguments (typed text is recorded
   as a character count only), clear the journal before sharing the panel or its recordings.
+- **Remembered installed apps.** `<profile>/.apk-vm/installed-apps.json` stores the APK path,
+  package name, label, launch activity and instance for APKs installed through the plugin, and
+  archived copies live under `<profile>/.apk-vm/apks` (newest 10). Both stay on this host and are
+  used only to re-install a package that the guest lost (quick-boot reset, recreated AVD, plugin
+  upgrade). Delete the files or set `autoReinstall: false` to opt out.
 
 ## Network activity
 

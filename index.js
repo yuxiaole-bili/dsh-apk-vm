@@ -41,9 +41,10 @@ import { buildApksFromAab, aabInfo, detectBundletool } from './lib/aab.js';
 import { readHarFile, summarizeHar, filterHar, toCurl } from './lib/har.js';
 import { runAssertions, compareScreenshot, createTestReport, reportMarkdown } from './lib/ui-tests.js';
 import { SshAdbTunnel } from './lib/remote.js';
-import { CdpBridge } from './lib/cdp.js';
+import { CdpBridge, previewJsValue } from './lib/cdp.js';
 import { losslessJson } from './lib/json-safe.js';
 import { ActivityLog } from './lib/activity-log.js';
+import { InstalledAppRegistry, defaultInstalledAppsPath, reinstallMissingApps, summarizeReinstallResult } from './lib/installed-apps.js';
 
 const PLUGIN_VERSION = (() => {
   try {
@@ -863,7 +864,82 @@ export function apply(ctx, config = {}) {
       ? { rootDir: path.resolve(String(cfg.activityDir)) }
       : { dataDir: rootsFor()[0] || process.cwd() },
   );
+  // APKs installed through the plugin are remembered locally so a reset VM can
+  // get them back automatically (see reinstallRememberedApps below).
+  const appRegistry = new InstalledAppRegistry({
+    file: defaultInstalledAppsPath(rootsFor()[0] || process.cwd()),
+  });
   const snapshotApk = () => (lastApk ? { ...lastApk } : null);
+
+  function rememberInstalledApp(apkPath, meta, instanceId = 'default') {
+    if (!apkPath) return;
+    void appRegistry
+      .record({
+        apkPath,
+        packageName: (meta && meta.packageName) || null,
+        label: (meta && meta.label) || path.basename(apkPath),
+        launchActivity: (meta && meta.launchActivity) || null,
+        instanceId,
+      })
+      .catch(() => {});
+  }
+
+  let reinstallKick = null;
+  let reinstallOnReadyKicked = false;
+
+  /**
+   * Reinstall remembered APKs whose package is missing on the ready VM. Runs
+   * once per plugin start when an already-running VM is observed, and after
+   * every background start. Writes one `source: system` activity entry when it
+   * actually reinstall anything (or fails).
+   */
+  async function reinstallRememberedApps(reason) {
+    if (cfg.autoReinstall === false) return { skipped: 'disabled' };
+    if (reinstallKick) return reinstallKick;
+    reinstallKick = (async () => {
+      try {
+        const status = await vm.status();
+        if (!isReady(status)) return { skipped: 'not-ready' };
+        const result = await reinstallMissingApps({
+          registry: appRegistry,
+          listPackages: () => vm.listPackages({ thirdPartyOnly: false }),
+          installApk: (apkPath) => vm.installApk(apkPath),
+        });
+        if (result.reinstalled.length || result.failed.length) {
+          void activityLog.record({
+            action: 'reinstall',
+            source: 'system',
+            tool: 'apk-vm',
+            summary: summarizeReinstallResult(result),
+            ok: result.ok && result.failed.length === 0,
+            error: result.failed.length
+              ? result.failed.map((item) => item.error).filter(Boolean).join('; ').slice(0, 800)
+              : result.error || null,
+            durationMs: null,
+          });
+          if (typeof console !== 'undefined' && typeof console.log === 'function') {
+            console.log(`[apk-vm] auto-reinstall (${reason}): ${summarizeReinstallResult(result)}`);
+          }
+        }
+        return result;
+      } catch (error) {
+        if (typeof console !== 'undefined' && typeof console.log === 'function') {
+          console.log(`[apk-vm] auto-reinstall (${reason}) failed: ${error && error.message ? error.message : error}`);
+        }
+        return { ok: false, error: String((error && error.message) || error) };
+      } finally {
+        reinstallKick = null;
+      }
+    })();
+    return reinstallKick;
+  }
+
+  function maybeReinstallOnReady(status) {
+    if (reinstallOnReadyKicked) return;
+    if (!status || status.state !== 'ready') return;
+    reinstallOnReadyKicked = true;
+    void reinstallRememberedApps('ready');
+  }
 
   /** Resolve, install and launch one APK; shared by the HTTP route, upload and Agent tool. */
   async function installApkFromPath(candidate, options = {}) {
@@ -904,7 +980,49 @@ export function apply(ctx, config = {}) {
     // Persist the installed app into the quick-boot image so the next start
     // restores straight into the installed state.
     void vm.saveSnapshot().catch(() => {});
+    if (options.trustedPath === true) {
+      // Uploads live in the OS temp dir and are pruned; keep a copy so the
+      // reinstall registry still has a usable APK after a VM reset.
+      const archived = await persistUploadedApk(apkPath, meta);
+      rememberInstalledApp(archived || apkPath, meta, 'default');
+    } else {
+      rememberInstalledApp(apkPath, meta, 'default');
+    }
     return { ...lastApk };
+  }
+
+  /**
+   * Copy an uploaded APK into `<dataDir>/.apk-vm/apks` (keeping the newest 10)
+   * so auto-reinstall survives temp-dir cleanup. Best effort: returns the
+   * original path when the copy fails.
+   */
+  async function persistUploadedApk(apkPath, meta) {
+    try {
+      const archiveDir = path.join(rootsFor()[0] || process.cwd(), '.apk-vm', 'apks');
+      await fsp.mkdir(archiveDir, { recursive: true });
+      const stem = String((meta && meta.packageName) || 'app').replace(/[^A-Za-z0-9._-]+/g, '_').slice(0, 60) || 'app';
+      const target = path.join(archiveDir, `${stem}-${Date.now()}.apk`);
+      await fsp.copyFile(apkPath, target);
+      try {
+        const names = (await fsp.readdir(archiveDir)).filter((name) => name.toLowerCase().endsWith('.apk'));
+        if (names.length > 10) {
+          const stats = [];
+          for (const name of names) {
+            const stat = await fsp.stat(path.join(archiveDir, name)).catch(() => null);
+            if (stat) stats.push({ name, mtimeMs: stat.mtimeMs });
+          }
+          stats.sort((a, b) => b.mtimeMs - a.mtimeMs);
+          for (const stale of stats.slice(10)) {
+            await fsp.rm(path.join(archiveDir, stale.name), { force: true }).catch(() => {});
+          }
+        }
+      } catch {
+        /* pruning is best effort */
+      }
+      return target;
+    } catch {
+      return apkPath;
+    }
   }
 
   const uploadDir = path.join(os.tmpdir(), 'dsh-apk-vm-uploads');
@@ -1002,6 +1120,11 @@ export function apply(ctx, config = {}) {
     if (startKick) return startKick;
     startKick = vm
       .start()
+      .then(() => {
+        // A fresh boot may have lost installed apps (snapshot reset / recreated
+        // AVD); put back the ones this plugin installed.
+        void reinstallRememberedApps('start');
+      })
       .catch((error) => {
         if (typeof console !== 'undefined' && typeof console.log === 'function') {
           console.log(`[apk-vm] background start failed: ${error && error.message ? error.message : error}`);
@@ -1058,6 +1181,7 @@ export function apply(ctx, config = {}) {
     let display = null;
     if (ready) display = await getScreen(status.serial);
     maybeAutoStart(status);
+    maybeReinstallOnReady(status);
     return {
       ok: true,
       pluginVersion: PLUGIN_VERSION,
@@ -1081,6 +1205,7 @@ export function apply(ctx, config = {}) {
       },
       screen: display ? { width: display.width, height: display.height } : null,
       apk: snapshotApk(),
+      rememberedApps: await appRegistry.summary(),
       installing: Boolean(installInFlight),
       warming: Boolean(startKick),
       stream: { fps: streamFps, hostFps: measuredFrameFps(), h264: scrcpyStatus() },
@@ -2462,7 +2587,9 @@ export function apply(ctx, config = {}) {
         if (!(await ready())) return;
         const body = await readJsonBody(req);
         const apkPath = resolveApkPath(body.path, rootsFor());
-        sendJson(res, 200, { ok: true, ...(await instance.installApk(apkPath)) });
+        const meta = await instance.installApk(apkPath);
+        rememberInstalledApp(apkPath, meta, instance.id);
+        sendJson(res, 200, { ok: true, ...meta });
         return;
       }
       if (rest === 'upload' && req.method === 'POST') {
@@ -2483,7 +2610,10 @@ export function apply(ctx, config = {}) {
         const dir = await prepareUploadDir();
         const target = path.join(dir, `${Date.now()}-${randomUUID().slice(0, 8)}-${name}`);
         await fsp.writeFile(target, data);
-        sendJson(res, 200, { ok: true, ...(await instance.installApk(target)), upload: { fileName: name, bytes: data.length } });
+        const meta = await instance.installApk(target);
+        const archived = await persistUploadedApk(target, meta);
+        rememberInstalledApp(archived || target, meta, instance.id);
+        sendJson(res, 200, { ok: true, ...meta, upload: { fileName: name, bytes: data.length } });
         return;
       }
       if (rest.startsWith('debug/')) {
@@ -3871,7 +4001,7 @@ export function apply(ctx, config = {}) {
       webviewQuery: (selector, options) => cdpFor(api).query(selector, {
         target: webviewDescriptor(options && options.target),
       }),
-      webviewEval: (script, options) => withCdpSession(api, options, (session) => session.evaluate(script)),
+      webviewEval: (script, options) => withCdpSession(api, options, (session) => session.evaluateJson(script)),
       webviewClick: (selector, options) => withCdpSession(api, options, (session) => session.click(selector)),
       webviewWaitFor: (selector, options) => withCdpSession(api, options, (session) => session.waitFor(selector, {
         timeoutMs: options && options.timeoutMs,
@@ -4007,7 +4137,12 @@ export function apply(ctx, config = {}) {
       getClipboard: () => instance.getClipboard(),
       setClipboard: (text, paste) => instance.setClipboard(text, paste),
       typeText: (text) => instance.sendText(text),
-      install: async (apkPath) => instance.installApk(resolveApkPath(apkPath, rootsFor())),
+      install: async (apkPath) => {
+        const resolved = resolveApkPath(apkPath, rootsFor());
+        const meta = await instance.installApk(resolved);
+        rememberInstalledApp(resolved, meta, instance.id);
+        return meta;
+      },
       pushFile: (local, remote) => instance.pushFile(local, remote),
       pullFile: (remote, local) => instance.pullFile(remote, local),
       reboot: (mode, options) => instance.reboot(mode, options),
@@ -4473,7 +4608,7 @@ export function apply(ctx, config = {}) {
         x2: { type: 'integer', description: 'swipe: end device x coordinate.' },
         y2: { type: 'integer', description: 'swipe: end device y coordinate.' },
         selector: { type: 'string', description: 'webview/tap_selector/type_text: CSS selector, or testid:VALUE for [data-testid="VALUE"]; open shadow roots are supported.' },
-        script: { type: 'string', description: 'webview eval: JavaScript expression evaluated in the page (return a JSON-serializable value).' },
+        script: { type: 'string', description: 'webview eval: single JavaScript expression evaluated in the page; returns result.value (values that do not survive JSON by value come back as a property snapshot). Use an IIFE to return a value from a sequence.' },
         targetId: { type: 'string', description: 'webview: optional DevTools target id from action=webview webviewAction=list.' },
         webviewAction: { type: 'string', description: 'webview: list|eval|click|wait_for|insert_text|info.' },
         webviewTarget: { type: 'string', description: 'webview: target id, URL substring, title substring, or 1-based index.' },
@@ -5090,7 +5225,8 @@ export function apply(ctx, config = {}) {
           if (action === 'eval') {
             if (!args.script) throw new Error('webview eval requires script');
             const value = await api.webviewEval(args.script, { target });
-            return { ok: true, summary: `evaluated JS in WebView on ${api.id}`, result: { value } };
+            const preview = previewJsValue(value, 240);
+            return { ok: true, summary: `evaluated JS in WebView on ${api.id} => ${preview}`, result: { value } };
           }
           if (action === 'click') {
             if (!args.selector) throw new Error('webview click requires selector');

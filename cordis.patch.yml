@@ -26,6 +26,12 @@
         prewarm: false
         prewarmDelayMs: 3000
         autoStart: true
+        # Remember APKs installed through the plugin and reinstall them on the
+        # next boot when the guest no longer has the package (quick-boot
+        # snapshot reset, recreated AVD, plugin/emulator upgrade). The registry
+        # lives in <profile>/.apk-vm/installed-apps.json; uploaded APKs are kept
+        # under <profile>/.apk-vm/apks (newest 10). Set false to opt out.
+        autoReinstall: true
         # Multiple isolated VMs: the first Agent gets the default instance;
         # later Agents get their own AVD/port until maxInstances extra VMs.
         multiInstance: true
