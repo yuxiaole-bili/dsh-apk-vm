@@ -36,6 +36,10 @@ reporting, advertising or a remote backend.
   used only to re-install a package that the guest lost (quick-boot reset, recreated AVD, plugin
   upgrade). Delete the files or set `autoReinstall: false` to opt out.
 
+- **Media settings** are local: camera modes, poster paths and microphone mode live in
+  `<profile>/.apk-vm/media.json`. Remote sessions upload the selected poster/audio file to
+  `/tmp/apk-vm-media/<id>` on the remote host over the same SSH connection; nothing else is
+  sent.
 ## Network activity
 
 - The plugin talks to the local DSH Web server and local `adb`/emulator processes.
@@ -51,6 +55,13 @@ reporting, advertising or a remote backend.
   Environment card then offers the manual actions as before). No analytics, telemetry,
   advertising or remote backend is involved, and no third-party endpoint other than the ones
   listed above is contacted by the plugin itself.
+- **Remote VM host (opt-in).** If you configure a remote VM in the panel, the plugin opens an SSH
+  connection to that host (`BatchMode=yes`, no password prompt) and forwards a loopback port to
+  the remote emulator's adb port. Only when you tick "start a headless emulator" does it also run
+  a fixed `emulator -avd … -no-window …` command there over the same connection. The SSH key
+  path stays on this host and is passed only to the local `ssh` process;
+  `<profile>/.apk-vm/remote-profile.json` stores host/user/port/AVD (no key material), and
+  nothing is sent anywhere else.
 
 ## Public repository hygiene
 

@@ -1,9 +1,55 @@
 # Changelog
 
+## 0.12.1
+
+### Added
+
+- **Remote VM multi-session.** Remote hosts are now first-class VM sources: profiles live in
+  `<profile>/.apk-vm/remote-profiles.json` (validated, no key contents), `RemoteSessionManager`
+  can run several sessions concurrently (`remoteMaxSessions`, default 4), each with its own AVD,
+  adb tunnel, H.264 stream and instance id. New helpers: `RemoteProfileBook`,
+  `RemoteSessionManager`, `normalizeExtraEmulatorArgs`, `parseRemoteListeningPorts`;
+  `lib/remote-instance.js` implements the remote instance surface. Remote `disconnect` now kills
+  the remote emulator through `<sdkRoot>/platform-tools/adb` (fixed: non-interactive SSH PATH
+  often has no adb). Covered by `spike/remote-test.mjs` (45 checks) and
+  `spike/remote-instance-test.mjs` (23 checks).
+- **Emulator inventory.** `GET /apk-vm/emulators` merges local AVD/device state with every saved
+  remote host (`lib/emulator-inventory.js`, one SSH round trip per host) plus the panel
+  "Available emulators" card.
+- **Virtual camera.** Camera back/front modes and `-virtualscene-poster` posters, managed by
+  `GET/POST /apk-vm/camera`, the panel Media card, or `cfg.camera` (`lib/media.js`).
+- **Virtual microphone.** Mic modes `off` / `host` / `file`; file mode loops audio into a
+  virtual PulseAudio source (null-sink + remap-source) and is available on Linux and remote
+  hosts; managed by `GET/POST /apk-vm/mic`, the panel Media card, or `cfg.mic`.
+- **Remote VM host over SSH (远端虚拟机).** `/apk-vm/remote` now turns an SSH-reachable host
+  into the VM proxy instead of only opening a bare tunnel: it forwards a loopback port to the
+  remote emulator's adb port, runs `adb connect` and attaches the device to the normal
+  boot-wait/H.264/input/debug path. `launch: true` starts a fixed headless emulator
+  (`-no-window -no-audio -no-boot-anim -gpu swiftshader_indirect`) on the remote host over the
+  same connection, and `disconnect` can stop it again. The validated profile (host/user/ports/
+  AVD; no key material) is persisted under `<profile>/.apk-vm/remote-profile.json`, the panel
+  card prefills from it and polls the tunnel/launch state every two seconds. New helpers in
+  `lib/remote.js` and a rewritten `spike/remote-test.mjs` (27 checks: validation/injection
+  safety, fixed command builders, profile store, bounded `runSshCommand`, route round-trip).
+
+### Changed
+
+- New plugin icon (`icon.svg`, 36×36): layered screens in lemon/grass-green and violet, replacing
+  the thin `currentColor` glyph that rendered nearly invisible on dark tiles.
+- Refreshed the demo screenshots from the 0.12.0 panel UI (main panel, Activity card, guest,
+  Environment, APK files and Rooted debug cards). Private host details — the Windows user name,
+  real APK names/paths and the assistant avatar — are masked with Gaussian blur.
+
+### Removed
+
+- `docs/screenshot-sidebar.png`: replaced by the refreshed panel and card screenshots.
+
 ## 0.12.0
 
-WebView read-out and remembered-APK release: `webviewAction=eval` now returns real values, and
-APKs installed through the plugin survive a guest reset.
+WebView read-out, remembered APKs and zero-config first run.
+
+`webviewAction=eval` now returns real values, APKs installed through the plugin survive a guest
+reset, and the plugin can provision its own JDK / Android SDK / system image / AVD on first use.
 
 ### Added
 
@@ -122,9 +168,13 @@ interactions, and a first-class zero-config provisioning chain.
   and per-candidate timeouts plus the known-good JDK table make it fail over instead.
 - macOS arm64 provisioning selected the x86_64 image; it now defaults to `arm64-v8a`.
 
-## 0.12.0
+### Fixed
 
-Zero-config first run: the plugin now provisions its own JDK, Android SDK, system image and AVD.
+- `GET/POST /apk-vm/camera` accepted poster paths that did not exist; save/apply now reject
+  missing or unreadable `-virtualscene-poster` files with the offending poster name and path
+  instead of failing later on the next emulator launch.
+
+### Zero-config first run
 
 ### Added
 

@@ -77,6 +77,28 @@
         # non-loopback clients by default even if the DSH web UI is exposed to
         # the LAN. Set true only behind your own authenticated reverse proxy.
         allowRemote: false
+        # Remote VM sessions over SSH (opt-in feature): each session forwards a
+        # remote emulator's adb port to a loopback port, attaches it as an
+        # external device and streams H.264 back through the same SSH tunnel.
+        # remoteMaxSessions caps how many remote sessions stay open at once.
+        remoteMaxSessions: 4
+        # Virtual camera defaults (local VM and new remote sessions).
+        # back/front: none | emulated | virtualscene | webcam0..N
+        # posters: PNG/JPEG files drawn inside the virtualscene (name=path).
+        # camera:
+        #   back: emulated
+        #   front: none
+        #   posters:
+        #     - name: poster1
+        #       path: 'D:/media/poster.png'
+        # Virtual microphone defaults: off | host | file. Linux/remote hosts
+        # use a PulseAudio virtual source; Windows supports host passthrough
+        # (or an OBS/VB-Audio virtual device) and cannot loop a file without a
+        # system audio driver.
+        # mic:
+        #   mode: off
+        #   backend: ''
+        #   filePath: ''
         # APK discovery roots. The current workspace is always included; add
         # platform-specific directories here (omit for a portable default).
         # roots:

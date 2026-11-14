@@ -853,10 +853,13 @@ const Page = pageElement ? pageElement.type : null;
   const iconSource = fs.readFileSync(path.join(root, 'icon.svg'), 'utf8');
   check('icon.svg is an svg root', /^\s*<svg[\s>]/.test(iconSource));
   check(
-    'icon.svg is 24x24 with a viewBox',
-    /width="24"/.test(iconSource) && /height="24"/.test(iconSource) && /viewBox="0 0 24 24"/.test(iconSource)
+    'icon.svg is 36x36 with a viewBox',
+    /width="36"/.test(iconSource) && /height="36"/.test(iconSource) && /viewBox="0 0 36 36"/.test(iconSource)
   );
-  check('icon.svg uses currentColor', /stroke="currentColor"/.test(iconSource) && /fill="currentColor"/.test(iconSource));
+  check(
+    'icon.svg paints with its own gradients (dark-mode safe, no currentColor)',
+    !/currentColor/.test(iconSource) && /fill="url\(#/.test(iconSource)
+  );
   check('icon.svg has no external references', !/<image\b/i.test(iconSource) && !/href=/i.test(iconSource) && !/<script/i.test(iconSource));
   check('icon.svg closes properly', /<\/svg>\s*$/.test(iconSource));
 

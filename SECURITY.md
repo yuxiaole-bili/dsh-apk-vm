@@ -109,8 +109,25 @@ they demonstrate a way to exceed the stated boundaries.
    `sdkmanager`.
 9. **The plugin does not send telemetry** or contact third-party services on its own; it talks
    to the local adb/emulator and the same-origin DSH Web server. Network activity is limited to
-   the `autoSetup` provisioning described above and the user's own `sdkmanager`; no analytics,
-   identifiers or usage data are collected.
+   the `autoSetup` provisioning described above, the user's own `sdkmanager`, and an SSH
+   connection to a host the user explicitly configures for a remote VM; no analytics, identifiers
+   or usage data are collected.
+10. **The remote VM proxy runs fixed commands on a user-configured SSH host.** When you connect a
+    remote VM (`POST /apk-vm/remote`), the plugin starts the local `ssh` client with
+    `BatchMode=yes` (a password prompt fails instead of hanging) and forwards a loopback port to
+    the remote emulator's adb port. With `launch: true` it additionally runs one fixed
+    `emulator -avd … -no-window …` command on that host over the same connection; every value is
+    validated and single-quote escaped, so profile fields cannot inject shell commands. The SSH
+    key path is only passed to the local `ssh` process; `<profile>/.apk-vm/remote-profile.json`
+    stores host/user/port/AVD and no key material. The remote host is trusted infrastructure —
+    the plugin does not harden it, and the rooted adb device exposed there has the same trust
+    level as a local AVD.
+
+11. **Virtual camera/microphone media are uploaded to the configured remote host.** When a
+    remote session uses a poster or audio file, the plugin copies that file over the existing
+    SSH connection (stdin write with quoted, validated fixed paths under `/tmp/apk-vm-media`).
+    The file is audio/image content only and no shell string is constructed from user input;
+    local media settings are stored in `<profile>/.apk-vm/media.json`.
 
 ## Hardening status
 

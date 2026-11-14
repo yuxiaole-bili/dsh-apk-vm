@@ -411,6 +411,41 @@ window.__ModuleLoader__.load({
       'remote.disconnect': 'Disconnect',
       'remote.connected': 'SSH tunnel connected',
       'remote.disconnected': 'SSH tunnel closed',
+  'remote.avd': 'Remote AVD name',
+  'remote.launch': 'Start a headless emulator on the remote host',
+  'remote.launchHint': 'Runs a fixed nohup command over SSH; the remote host needs `emulator` on PATH or a remote emulator path',
+  'remote.stopEmulator': 'Stop the remote emulator when disconnecting',
+  'remote.profileSaved': 'Saved host: {host}',
+  'remote.forget': 'Forget saved profile',
+  'remote.launching': 'Starting the remote emulator…',
+  'remote.log': 'Remote log',
+  'remote.serial': 'Serial',
+  'remote.noTunnel': 'Not connected',
+  'action.failed': 'Request failed',
+  'media.title': 'Camera & microphone',
+  'media.back': 'Back camera',
+  'media.front': 'Front camera',
+  'media.posterName': 'Poster name',
+  'media.posterPath': 'Poster image path (host)',
+  'media.posterAdd': 'Add poster',
+  'media.mic': 'Microphone',
+  'media.micOff': 'off',
+  'media.micHost': 'host passthrough',
+  'media.micFile': 'file loop (Linux/remote)',
+  'media.micPath': 'Audio file path',
+  'media.micBackend': 'Audio backend',
+  'media.apply': 'Save settings',
+  'media.applyRestart': 'Save & restart VM',
+  'media.saved': 'Camera/microphone settings saved',
+  'media.hint': 'Camera and microphone flags apply on the next boot of the default VM.',
+  'emulators.title': 'Available emulators',
+  'emulators.refresh': 'Refresh',
+  'emulators.local': 'Local AVDs',
+  'emulators.empty': 'No emulators reported.',
+  'emulators.hostDown': 'unreachable',
+  'remote.sessions': 'Remote sessions',
+  'remote.sessionDisconnect': 'Disconnect',
+  'remote.sessionKill': 'Disconnect & stop',
       'devices.detach': 'Detach',
       'devices.attached': 'Attached {serial}',
       'devices.detached': 'Detached external device',
@@ -779,6 +814,41 @@ window.__ModuleLoader__.load({
       'remote.disconnect': '断开',
       'remote.connected': 'SSH 隧道已连接',
       'remote.disconnected': 'SSH 隧道已关闭',
+  'remote.avd': '远端 AVD 名称',
+  'remote.launch': '在远端启动无界面模拟器',
+  'remote.launchHint': '通过 SSH 执行固定的 nohup 命令；需要远端 emulator 在 PATH 中或填写远端 emulator 路径',
+  'remote.stopEmulator': '断开时停止远端模拟器',
+  'remote.profileSaved': '已保存的主机：{host}',
+  'remote.forget': '清除已保存配置',
+  'remote.launching': '正在启动远端模拟器…',
+  'remote.log': '远端日志',
+  'remote.serial': '设备序列号',
+  'remote.noTunnel': '未连接',
+  'action.failed': '操作失败',
+  'media.title': '摄像头与麦克风',
+  'media.back': '后置摄像头',
+  'media.front': '前置摄像头',
+  'media.posterName': '海报名称',
+  'media.posterPath': '海报图片路径（宿主机）',
+  'media.posterAdd': '添加海报',
+  'media.mic': '麦克风',
+  'media.micOff': '关闭',
+  'media.micHost': '宿主机透传',
+  'media.micFile': '文件循环（Linux/远端）',
+  'media.micPath': '音频文件路径',
+  'media.micBackend': '音频后端',
+  'media.apply': '保存设置',
+  'media.applyRestart': '保存并重启虚拟机',
+  'media.saved': '摄像头/麦克风设置已保存',
+  'media.hint': '摄像头与麦克风参数在默认虚拟机下次启动时生效。',
+  'emulators.title': '可用模拟器',
+  'emulators.refresh': '刷新',
+  'emulators.local': '本地 AVD',
+  'emulators.empty': '未发现可用模拟器。',
+  'emulators.hostDown': '不可达',
+  'remote.sessions': '远端会话',
+  'remote.sessionDisconnect': '断开',
+  'remote.sessionKill': '断开并停止模拟器',
       'devices.detach': '断开',
       'devices.attached': '已连接 {serial}',
       'devices.detached': '已断开外部设备',
@@ -1269,8 +1339,24 @@ window.__ModuleLoader__.load({
       '.apkvm-banner-text{flex:1 1 auto;min-width:0;word-break:break-word}' +
       '.apkvm-banner-close{appearance:none;border:0;background:transparent;color:inherit;font:inherit;font-size:15px;line-height:1;padding:2px 4px;cursor:pointer;border-radius:5px;opacity:.75}' +
       '.apkvm-banner-close:hover{opacity:1}' +
-      '.apkvm-body{flex:1 1 auto;min-height:0;display:flex;gap:16px;padding:14px 20px 18px;overflow:hidden;align-items:stretch}' +
-      '.apkvm-aside{flex:0 0 280px;width:280px;min-width:0;min-height:0;display:flex;flex-direction:column;gap:10px;overflow-y:auto;overflow-x:hidden;padding-right:2px}' +
+      '.apkvm-body{flex:1 1 auto;min-height:0;display:flex;flex-direction:row;gap:12px;padding:14px 20px 18px;overflow:hidden;align-items:stretch}' +
+      /* Wide-window dashboard: the phone keeps its natural 9:19.5 height, so the
+         cards move from the single left rail into a two-column rail on the right
+         instead of leaving empty margins around the preview. The Activity card
+         opens by default and stretches its timeline to the available height. */
+      '.apkvm-body.apkvm-dashboard{display:grid;grid-template-columns:280px auto minmax(0,1fr);gap:12px;align-items:stretch}' +
+      /* The APK list is the flexible card in the single-rail layout; in the
+         dashboard the rail is not the only content column, so keep it compact. */
+      '.apkvm-dashboard .apkvm-apkcard{flex:none;min-height:0}' +
+      '.apkvm-dashboard .apkvm-apkcard .apkvm-list{flex:none;max-height:min(38vh,360px);min-height:60px}' +
+      '.apkvm-dashboard .apkvm-side{flex-direction:column;gap:8px}' +
+      '.apkvm-dashboard .apkvm-side .apkvm-activity[open]{display:flex;flex-direction:column;flex:1 1 auto;min-height:0}' +
+      '.apkvm-dashboard .apkvm-side .apkvm-activity[open]>.apkvm-activity-body{flex:1 1 auto;min-height:0;display:flex;flex-direction:column}' +
+      '.apkvm-dashboard .apkvm-side .apkvm-activity[open] .apkvm-activity-list{flex:1 1 auto;max-height:none}' +
+      '.apkvm-aside{min-width:0;min-height:0;display:flex;flex-direction:column;gap:10px;overflow-y:auto;overflow-x:hidden;padding-right:2px}' +
+      '.apkvm-side{min-width:0;min-height:0;display:flex;flex-direction:column;gap:8px;overflow-y:auto;overflow-x:hidden;padding-right:2px}' +
+      '.apkvm-sidecol{min-width:0;display:flex;flex-direction:column;gap:8px}' +
+      '.apkvm-sidecol>.apkvm-card{flex:none}' +
       '.apkvm-card{flex:none;display:flex;flex-direction:column;gap:8px;padding:10px 11px;border:1px solid var(--dsw-alias-border-l1);border-radius:12px;background:var(--dsw-alias-bg-layer-1);min-width:0}' +
       '.apkvm-cardhead{display:flex;align-items:center;gap:8px;flex-wrap:wrap;min-width:0}' +
       '.apkvm-card-title{font-size:11px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;color:var(--dsw-alias-label-secondary);margin:0}' +
@@ -1319,15 +1405,17 @@ window.__ModuleLoader__.load({
       '.apkvm-scroll::-webkit-scrollbar{width:8px;height:8px}' +
       '.apkvm-scroll::-webkit-scrollbar-thumb{background:var(--dsw-alias-border-l2);border-radius:4px}' +
       '.apkvm-scroll::-webkit-scrollbar-track{background:transparent}' +
-      '@media (max-width:900px){.apkvm-body{flex-direction:column;overflow-y:auto}.apkvm-aside{flex:0 0 auto;width:100%;overflow:visible}.apkvm-list{max-height:200px}.apkvm-stage{min-height:440px}.apkvm-phonewrap{min-height:340px}.apkvm-subtitle{max-width:60vw}}' +
+      '@media (max-width:1279px){.apkvm-body{display:flex;flex-direction:column;overflow-y:auto;gap:12px}.apkvm-aside{flex:0 0 auto;width:100%;overflow:visible;gap:8px}.apkvm-side{flex:none;width:100%;overflow:visible}.apkvm-list{max-height:200px}.apkvm-stage{min-height:440px}.apkvm-phonewrap{min-height:340px}.apkvm-subtitle{max-width:60vw}}' +
+      '@media (max-width:900px){.apkvm-body{display:flex;flex-direction:column;overflow-y:auto}.apkvm-aside{flex:0 0 auto;width:100%;overflow:visible}.apkvm-list{max-height:200px}.apkvm-stage{min-height:440px}.apkvm-phonewrap{min-height:340px}.apkvm-subtitle{max-width:60vw}}' +
       '@media (max-width:560px){.apkvm-header{padding:10px 12px}.apkvm-body{padding:10px 12px 14px}.apkvm-toolbar{gap:4px}}' +
       /* dsh-better-sidebar tab layout: a native side pane is narrow, so stack
          the APK list above the phone frame and keep the header compact. */
       '.apkvm-page.apkvm-embedded{height:100%;min-height:0;background:var(--dsw-alias-bg-base)}' +
       '.apkvm-embedded .apkvm-header{padding:9px 12px;gap:6px;flex-wrap:wrap}' +
       '.apkvm-embedded .apkvm-subtitle{display:none}' +
-      '.apkvm-embedded .apkvm-body{flex-direction:column;overflow-y:auto;gap:8px;padding:10px 12px 14px}' +
+      '.apkvm-embedded .apkvm-body{display:flex;flex-direction:column;overflow-y:auto;gap:8px;padding:10px 12px 14px}' +
       '.apkvm-embedded .apkvm-aside{flex:0 0 auto;width:100%;overflow:visible;padding-right:0;gap:8px}' +
+      '.apkvm-embedded .apkvm-side{flex:none;width:100%;overflow:visible;gap:8px}' +
       '.apkvm-embedded .apkvm-list{max-height:170px}' +
       '.apkvm-embedded .apkvm-log{max-height:110px}' +
       '.apkvm-embedded .apkvm-stage{min-height:400px;flex:0 0 auto}' +
@@ -1414,8 +1502,9 @@ window.__ModuleLoader__.load({
       '.apkvm-embedded .apkvm-header{flex-wrap:wrap}' +
       '.apkvm-page.apkvm-maximized{position:fixed;inset:0;z-index:2147483000;width:100vw;height:100vh;background:var(--dsw-alias-bg-base);box-shadow:0 0 0 1px var(--dsw-alias-border-l2)}' +
       '.apkvm-page.apkvm-maximized .apkvm-header{flex:0 0 auto;background:var(--dsw-alias-bg-base);padding-right:142px}' +
-      '.apkvm-page.apkvm-maximized .apkvm-body{flex:1 1 auto;min-height:0;padding:10px 16px 14px;gap:10px;overflow:hidden;flex-direction:row}' +
+      '.apkvm-page.apkvm-maximized .apkvm-body{flex:1 1 auto;min-height:0;padding:10px 16px 14px;gap:10px;overflow:hidden;display:flex;flex-direction:row}' +
       '.apkvm-page.apkvm-maximized .apkvm-aside{display:none}' +
+      '.apkvm-page.apkvm-maximized .apkvm-side{display:none}' +
       '.apkvm-page.apkvm-maximized .apkvm-stage{flex:1 1 auto;min-height:0;max-height:none}' +
       '.apkvm-page.apkvm-maximized .apkvm-phonewrap{flex:1 1 auto;min-height:0;padding:0}' +
       '.apkvm-page.apkvm-maximized .apkvm-phone{height:100%;max-height:calc(100vh - 150px);padding:6px;border-radius:22px}' +
@@ -1424,6 +1513,7 @@ window.__ModuleLoader__.load({
       '.apkvm-page.apkvm-maximized .apkvm-stagehint{max-width:760px}' +
       '.apkvm-page.apkvm-maximized .apkvm-subtitle,.apkvm-page.apkvm-maximized .apkvm-pillmeta{display:none}' +
       '.apkvm-page.apkvm-tools-collapsed .apkvm-aside{display:none}' +
+      '.apkvm-page.apkvm-tools-collapsed .apkvm-side{display:none}' +
       '.apkvm-max-close{position:absolute;top:9px;right:12px;z-index:6;appearance:none;font:inherit;font-size:12px;font-weight:600;height:30px;padding:0 12px;border-radius:8px;border:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-primary);cursor:pointer}' +
       '.apkvm-max-close:hover{background:var(--dsw-alias-bg-layer-2);border-color:var(--dsw-alias-brand-primary)}' +
       '.apkvm-quality{font:inherit;font-size:11px;height:24px;max-width:150px;padding:0 5px;border-radius:7px;border:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-base);color:var(--dsw-alias-label-primary);flex:none}' +
@@ -1509,7 +1599,7 @@ window.__ModuleLoader__.load({
         var instanceOptions = Array.isArray(propsSafe.instances) ? propsSafe.instances : [];
         var panelVisible = propsSafe.visible === undefined ? true : propsSafe.visible !== false;
 
-        var openState = React.useState(false);
+        var openState = React.useState(propsSafe.defaultOpen === true);
         var open = openState[0];
         var setOpen = openState[1];
 
@@ -2045,6 +2135,42 @@ window.__ModuleLoader__.load({
      * order so React can re-render it safely across Host state transitions.
      * ------------------------------------------------------------------ */
 
+    /* Wide-window dashboard breakpoint. Driven from JS (matchMedia) instead of
+       CSS only so the card DOM can move between the single left rail and the
+       two-column dashboard rail; the cards stay mounted in one place at a time. */
+    var DASHBOARD_MIN_WIDTH = 1600;
+
+    function useWideDashboard() {
+      var pair = React.useState(
+        typeof window === 'undefined' ? false : window.innerWidth >= DASHBOARD_MIN_WIDTH
+      );
+      var wide = pair[0];
+      var setWide = pair[1];
+      React.useEffect(function () {
+        if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') {
+          return undefined;
+        }
+        var query = window.matchMedia('(min-width: ' + DASHBOARD_MIN_WIDTH + 'px)');
+        function sync() {
+          setWide(query.matches);
+        }
+        sync();
+        if (typeof query.addEventListener === 'function') {
+          query.addEventListener('change', sync);
+        } else if (typeof query.addListener === 'function') {
+          query.addListener(sync);
+        }
+        return function () {
+          if (typeof query.removeEventListener === 'function') {
+            query.removeEventListener('change', sync);
+          } else if (typeof query.removeListener === 'function') {
+            query.removeListener(sync);
+          }
+        };
+      }, []);
+      return wide;
+    }
+
     function createPage(getTranslate) {
       var ActivityCard = createActivityCard(getTranslate);
 
@@ -2056,6 +2182,7 @@ window.__ModuleLoader__.load({
            `main` panel has no such prop and is always treated as visible. */
         var embedded = propsSafe.embedded === true;
         var tabVisible = propsSafe.visible === undefined ? true : propsSafe.visible !== false;
+        var wideDashboard = useWideDashboard() && !embedded;
 
         /* ---- state ---------------------------------------------------- */
         var snapshotState = React.useState(null);
@@ -2170,6 +2297,221 @@ window.__ModuleLoader__.load({
         var remoteSshState = React.useState(null);
         var remoteSsh = remoteSshState[0];
         var setRemoteSsh = remoteSshState[1];
+        var remoteAvdState = React.useState('');
+        var remoteAvd = remoteAvdState[0];
+        var setRemoteAvd = remoteAvdState[1];
+        var remoteLaunchState = React.useState(false);
+        var remoteLaunchOn = remoteLaunchState[0];
+        var setRemoteLaunchOn = remoteLaunchState[1];
+        var remoteStopOnDisconnectState = React.useState(true);
+        var remoteStopOnDisconnect = remoteStopOnDisconnectState[0];
+        var setRemoteStopOnDisconnect = remoteStopOnDisconnectState[1];
+        var remoteLaunchInfoState = React.useState(null);
+        var remoteLaunchInfo = remoteLaunchInfoState[0];
+        var setRemoteLaunchInfo = remoteLaunchInfoState[1];
+        var remoteProfileState = React.useState(null);
+        var remoteProfile = remoteProfileState[0];
+        var setRemoteProfile = remoteProfileState[1];
+        var remoteSessionsState = React.useState([]);
+        var remoteSessions = remoteSessionsState[0];
+        var setRemoteSessions = remoteSessionsState[1];
+        var remoteProfilesState = React.useState([]);
+        var remoteProfiles = remoteProfilesState[0];
+        var setRemoteProfiles = remoteProfilesState[1];
+        var mediaSettingsState = React.useState(null);
+        var mediaSettings = mediaSettingsState[0];
+        var setMediaSettings = mediaSettingsState[1];
+        var mediaBusyState = React.useState(false);
+        var mediaBusy = mediaBusyState[0];
+        var setMediaBusy = mediaBusyState[1];
+        var mediaPosterNameState = React.useState('');
+        var mediaPosterName = mediaPosterNameState[0];
+        var setMediaPosterName = mediaPosterNameState[1];
+        var mediaPosterPathState = React.useState('');
+        var mediaPosterPath = mediaPosterPathState[0];
+        var setMediaPosterPath = mediaPosterPathState[1];
+        var emulatorInventoryState = React.useState(null);
+        var emulatorInventory = emulatorInventoryState[0];
+        var setEmulatorInventory = emulatorInventoryState[1];
+        var emulatorBusyState = React.useState(false);
+        var emulatorBusy = emulatorBusyState[0];
+        var setEmulatorBusy = emulatorBusyState[1];
+
+        function applyRemoteState(data, prefill) {
+          if (!isObject(data)) return;
+          var sessions = Array.isArray(data.sessions) ? data.sessions : [];
+          var firstSession = sessions.length ? sessions[0] : null;
+          setRemoteSessions(sessions);
+          setRemoteSsh(data.tunnel || (firstSession && firstSession.tunnel) || null);
+          setRemoteLaunchInfo(data.launch || (firstSession && firstSession.launch) || null);
+          setRemoteProfile(data.profile || null);
+          if (Array.isArray(data.profiles)) setRemoteProfiles(data.profiles);
+          if (prefill && isObject(data.profile)) {
+            setRemoteHost(data.profile.host || '');
+            setRemoteUser(data.profile.user || '');
+            setRemoteKey(data.profile.keyPath || '');
+            setRemotePort(String(data.profile.remotePort || 5558));
+            setRemoteAvd(data.profile.avdName || '');
+            setRemoteLaunchOn(data.profile.launch === true);
+          }
+        }
+
+        // Prefill from the persisted profile and restore an existing tunnel after
+        // a panel reload; the panel keeps polling while a tunnel is connected.
+        React.useEffect(function () {
+          var disposed = false;
+          requestJson('/apk-vm/remote', { method: 'GET' }, T)
+            .then(function (result) {
+              if (disposed || !mountedRef.current || !result.ok) return;
+              applyRemoteState(result.data, true);
+            })
+            .catch(function () {});
+          return function () {
+            disposed = true;
+          };
+        }, []);
+
+        React.useEffect(
+          function () {
+            if (!remoteSsh) return undefined;
+            var disposed = false;
+            var timer = setInterval(function () {
+              requestJson('/apk-vm/remote', { method: 'GET' }, T)
+                .then(function (result) {
+                  if (disposed || !mountedRef.current || !result.ok) return;
+                  applyRemoteState(result.data, false);
+                })
+                .catch(function () {});
+            }, 2000);
+            return function () {
+              disposed = true;
+              clearInterval(timer);
+            };
+          },
+          [Boolean(remoteSsh)]
+        );
+
+        function loadMediaSettings() {
+          return requestJson('/apk-vm/camera', { method: 'GET' }, T)
+            .then(function (result) {
+              if (result.ok && isObject(result.data) && isObject(result.data.camera)) {
+                setMediaSettings({
+                  camera: result.data.camera,
+                  mic: result.data.mic || { mode: 'off' },
+                  capabilities: result.data.capabilities || {},
+                  settingsPath: result.data.settingsPath || '',
+                });
+              }
+              return result;
+            })
+            .catch(function () {
+              return null;
+            });
+        }
+
+        function loadEmulatorInventory() {
+          if (emulatorBusy) return Promise.resolve(null);
+          setEmulatorBusy(true);
+          return requestJson('/apk-vm/emulators', { method: 'GET' }, T)
+            .then(function (result) {
+              if (result.ok && isObject(result.data)) setEmulatorInventory(result.data);
+              return result;
+            })
+            .catch(function () {
+              return null;
+            })
+            .then(function (result) {
+              setEmulatorBusy(false);
+              return result;
+            });
+        }
+
+        React.useEffect(function () {
+          loadMediaSettings();
+          loadEmulatorInventory();
+        }, []);
+
+        function updateMediaSettings(patch) {
+          setMediaSettings(function (previous) {
+            var base = isObject(previous) ? previous : {};
+            var next = {
+              camera: isObject(base.camera) ? Object.assign({}, base.camera) : { back: 'emulated', front: 'none', posters: [] },
+              mic: isObject(base.mic) ? Object.assign({}, base.mic) : { mode: 'off' },
+              capabilities: base.capabilities || {},
+              settingsPath: base.settingsPath || '',
+            };
+            if (patch && isObject(patch.camera)) next.camera = Object.assign({}, next.camera, patch.camera);
+            if (patch && isObject(patch.mic)) next.mic = Object.assign({}, next.mic, patch.mic);
+            return next;
+          });
+        }
+
+        function saveMediaSettings(restart) {
+          if (!isObject(mediaSettings) || mediaBusy) return;
+          setMediaBusy(true);
+          var micSettings = Object.assign({}, mediaSettings.mic || { mode: 'off' });
+          if (micSettings.mode === 'file' && !micSettings.filePath) micSettings.mode = 'off';
+          var chain = requestJson(
+            '/apk-vm/camera',
+            { method: 'POST', body: JSON.stringify({ camera: mediaSettings.camera, action: 'save' }) },
+            T
+          ).then(function () {
+            return requestJson('/apk-vm/mic', { method: 'POST', body: JSON.stringify({ mic: micSettings, action: 'save' }) }, T);
+          });
+          if (restart) {
+            chain = chain
+              .then(function () {
+                return requestJson('/apk-vm/camera', { method: 'POST', body: JSON.stringify({ camera: mediaSettings.camera, action: 'apply' }) }, T);
+              })
+              .then(function () {
+                return requestJson(
+                  '/apk-vm/mic',
+                  { method: 'POST', body: JSON.stringify({ mic: micSettings, action: 'apply', restart: true }) },
+                  T
+                );
+              });
+          }
+          chain
+            .then(function (result) {
+              var warned = result && result.data && Array.isArray(result.data.warnings) ? result.data.warnings : [];
+              if (result && result.ok) {
+                setToast({ id: Date.now(), kind: 'success', text: warned.length ? warned.join('; ') : T('media.saved') });
+              } else {
+                setToast({ id: Date.now(), kind: 'error', text: (result && result.error) || T('action.failed') });
+              }
+            })
+            .catch(function (error) {
+              setToast({ id: Date.now(), kind: 'error', text: (error && error.message) || T('action.failed') });
+            })
+            .then(function () {
+              setMediaBusy(false);
+              loadMediaSettings();
+            });
+        }
+
+        function disconnectRemoteSession(sessionId, stopEmulator) {
+          if (!sessionId) return Promise.resolve(null);
+          return requestJson(
+            '/apk-vm/remote',
+            {
+              method: 'POST',
+              body: JSON.stringify({ action: 'disconnect', id: sessionId, stopEmulator: stopEmulator === true, detachDevice: true }),
+            },
+            T
+          )
+            .then(function (result) {
+              if (result && result.ok) {
+                setToast({ id: Date.now(), kind: 'success', text: T('remote.disconnected') });
+                if (isObject(result.data)) applyRemoteState(result.data, false);
+              } else {
+                setToast({ id: Date.now(), kind: 'error', text: (result && result.error) || T('action.failed') });
+              }
+              return result;
+            })
+            .catch(function (error) {
+              setToast({ id: Date.now(), kind: 'error', text: (error && error.message) || T('action.failed') });
+            });
+        }
         var deviceBusyState = React.useState(false);
         var deviceBusy = deviceBusyState[0];
         var setDeviceBusy = deviceBusyState[1];
@@ -4165,6 +4507,8 @@ window.__ModuleLoader__.load({
               user: remoteUser.trim(),
               keyPath: remoteKey.trim() || undefined,
               remotePort: Number(remotePort) || 5558,
+              avdName: remoteAvd.trim() || undefined,
+              launch: Boolean(remoteLaunchOn),
             }),
           }, T).then(function (result) {
             if (!mountedRef.current) return;
@@ -4173,17 +4517,42 @@ window.__ModuleLoader__.load({
               pushToast('error', (result.error || T('err.action')).slice(0, 500));
               return;
             }
-            setRemoteSsh(result.data && result.data.tunnel ? result.data.tunnel : null);
-            pushToast('success', T('remote.connected'));
+            var data = isObject(result.data) ? result.data : {};
+            setRemoteSsh(data.tunnel || null);
+            setRemoteLaunchInfo(data.launch || null);
+            setRemoteProfile(data.profile || null);
+            pushToast('success', data.launch ? T('remote.launching') : T('remote.connected'));
             loadState();
             loadDevices();
+            loadSetup(true);
+          });
+        }
+
+        function forgetRemoteProfile() {
+          if (remoteSshBusy) return;
+          setRemoteSshBusy(true);
+          requestJson('/apk-vm/remote', { method: 'POST', body: JSON.stringify({ action: 'forget-profile' }) }, T).then(function (result) {
+            if (!mountedRef.current) return;
+            setRemoteSshBusy(false);
+            if (!result.ok) {
+              pushToast('error', (result.error || T('err.action')).slice(0, 500));
+              return;
+            }
+            setRemoteProfile(null);
+            pushToast('success', T('remote.disconnected'));
           });
         }
 
         function disconnectRemoteSsh() {
           if (remoteSshBusy) return;
           setRemoteSshBusy(true);
-          requestJson('/apk-vm/remote', { method: 'POST', body: JSON.stringify({ action: 'disconnect' }) }, T).then(function (result) {
+          requestJson('/apk-vm/remote', {
+            method: 'POST',
+            body: JSON.stringify({
+              action: 'disconnect',
+              stopEmulator: Boolean(remoteLaunchInfo && remoteStopOnDisconnect),
+            }),
+          }, T).then(function (result) {
             if (!mountedRef.current) return;
             setRemoteSshBusy(false);
             if (!result.ok) {
@@ -4191,6 +4560,7 @@ window.__ModuleLoader__.load({
               return;
             }
             setRemoteSsh(null);
+            setRemoteLaunchInfo(null);
             pushToast('success', T('remote.disconnected'));
             loadState();
             loadDevices();
@@ -5650,6 +6020,7 @@ window.__ModuleLoader__.load({
           instanceId: activeInstance,
           instances: instancesList,
           visible: tabVisible,
+          defaultOpen: wideDashboard,
           t: translate,
         });
 
@@ -6724,6 +7095,45 @@ window.__ModuleLoader__.load({
                 setRemotePort(event && event.target ? String(event.target.value) : '');
               },
             }),
+            h('input', {
+              className: 'apkvm-input',
+              type: 'text',
+              value: remoteAvd,
+              placeholder: T('remote.avd'),
+              spellCheck: false,
+              disabled: remoteSshBusy,
+              onChange: function (event) {
+                setRemoteAvd(event && event.target ? String(event.target.value) : '');
+              },
+            }),
+            h(
+              'label',
+              { style: { display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px' } },
+              h('input', {
+                type: 'checkbox',
+                checked: remoteLaunchOn,
+                disabled: remoteSshBusy,
+                onChange: function (event) {
+                  setRemoteLaunchOn(Boolean(event && event.target && event.target.checked));
+                },
+              }),
+              T('remote.launch')
+            ),
+            h('div', { className: 'apkvm-dim' }, T('remote.launchHint')),
+            remoteLaunchInfo
+              ? h(
+                  'label',
+                  { style: { display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px' } },
+                  h('input', {
+                    type: 'checkbox',
+                    checked: remoteStopOnDisconnect,
+                    onChange: function (event) {
+                      setRemoteStopOnDisconnect(Boolean(event && event.target && event.target.checked));
+                    },
+                  }),
+                  T('remote.stopEmulator')
+                )
+              : null,
             h(
               'div',
               { style: { display: 'flex', alignItems: 'center', gap: '5px', flexWrap: 'wrap' } },
@@ -6741,10 +7151,319 @@ window.__ModuleLoader__.load({
                     disabled: remoteSshBusy,
                     onClick: disconnectRemoteSsh,
                   })
+                : null,
+              remoteProfile && remoteProfile.host
+                ? actionBtn(T('remote.forget'), {
+                    key: 'remote-forget',
+                    small: true,
+                    disabled: remoteSshBusy,
+                    onClick: forgetRemoteProfile,
+                  })
                 : null
             ),
+            remoteSessions && remoteSessions.length
+              ? h(
+                  'div',
+                  { className: 'apkvm-remotestack', style: { display: 'flex', flexDirection: 'column', gap: '4px' } },
+                  h('div', { className: 'apkvm-dim' }, T('remote.sessions') + ': ' + String(remoteSessions.length)),
+                  remoteSessions.map(function (session) {
+                    return h(
+                      'div',
+                      {
+                        key: 'remote-session-' + session.id,
+                        style: { display: 'flex', alignItems: 'center', gap: '6px', fontSize: '11px' },
+                      },
+                      h(
+                        'span',
+                        { className: 'apkvm-dim', style: { minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' } },
+                        String(session.avdName || '') + ' · ' + String(session.host || '') + ' · ' + String(session.state || '')
+                      ),
+                      actionBtn(T(session.launch === true ? 'remote.sessionKill' : 'remote.sessionDisconnect'), {
+                        key: 'remote-session-stop-' + session.id,
+                        small: true,
+                        variant: 'danger',
+                        onClick: function () {
+                          disconnectRemoteSession(session.id, session.launch === true);
+                        },
+                      })
+                    );
+                  })
+                )
+              : null,
             remoteSsh && remoteSsh.serial
-              ? h('div', { className: 'apkvm-dim' }, 'adb ' + remoteSsh.serial)
+              ? h('div', { className: 'apkvm-dim' }, T('remote.serial') + ': ' + remoteSsh.serial)
+              : null,
+            remoteLaunchInfo
+              ? h(
+                  'div',
+                  { className: 'apkvm-dim' },
+                  T('remote.log') + ': ' + String(remoteLaunchInfo.logPath || '') + '  (console ' + String(remoteLaunchInfo.consolePort || '') + ')'
+                )
+              : null,
+            remoteProfile && remoteProfile.host
+              ? h('div', { className: 'apkvm-dim' }, T('remote.profileSaved', { host: remoteProfile.host }))
+              : null
+          )
+        );
+
+        var mediaCamera = mediaSettings && isObject(mediaSettings.camera) ? mediaSettings.camera : { back: 'emulated', front: 'none', posters: [] };
+        var mediaMic = mediaSettings && isObject(mediaSettings.mic) ? mediaSettings.mic : { mode: 'off' };
+        var mediaCaps = mediaSettings && isObject(mediaSettings.capabilities) ? mediaSettings.capabilities : {};
+        var mediaCameraModes = mediaCaps.camera && Array.isArray(mediaCaps.camera.modes) ? mediaCaps.camera.modes : ['none', 'emulated', 'virtualscene'];
+        var mediaMicBackends = mediaCaps.mic && Array.isArray(mediaCaps.mic.backendChoices) ? mediaCaps.mic.backendChoices : ['none', 'sdl', 'winmm', 'dsound'];
+        var mediaPosterList = Array.isArray(mediaCamera.posters) ? mediaCamera.posters : [];
+
+        function addMediaPoster() {
+          var name = String(mediaPosterName || '').trim();
+          var posterPath = String(mediaPosterPath || '').trim();
+          if (!name || !posterPath) return;
+          updateMediaSettings({ camera: { posters: mediaPosterList.concat([{ name: name, path: posterPath }]) } });
+          setMediaPosterName('');
+          setMediaPosterPath('');
+        }
+
+        function removeMediaPoster(name) {
+          updateMediaSettings({
+            camera: {
+              posters: mediaPosterList.filter(function (poster) {
+                return poster.name !== name;
+              }),
+            },
+          });
+        }
+
+        var mediaCard = h(
+          'details',
+          { className: 'apkvm-card apkvm-debug' },
+          h(
+            'summary',
+            { className: 'apkvm-debug-summary' },
+            h('span', { className: 'apkvm-card-title' }, T('media.title')),
+            h(
+              'span',
+              { className: 'apkvm-dim', style: { marginLeft: 'auto' } },
+              String(mediaCamera.back || '') + ' · ' + String(mediaMic.mode || 'off')
+            ),
+            h('span', { className: 'apkvm-chevron', 'aria-hidden': 'true' }, '▸')
+          ),
+          h(
+            'div',
+            { className: 'apkvm-debug-body' },
+            h('div', { className: 'apkvm-dim' }, T('media.mic')),
+            h(
+              'div',
+              { style: { display: 'flex', gap: '5px', flexWrap: 'wrap' } },
+              ['off', 'host', 'file'].map(function (mode) {
+                var label = mode === 'off' ? T('media.micOff') : mode === 'host' ? T('media.micHost') : T('media.micFile');
+                return actionBtn(label, {
+                  key: 'mic-mode-' + mode,
+                  small: true,
+                  variant: mediaMic.mode === mode ? 'primary' : undefined,
+                  onClick: function () {
+                    updateMediaSettings({ mic: { mode: mode } });
+                  },
+                });
+              })
+            ),
+            mediaMic.mode === 'file'
+              ? h('input', {
+                  className: 'apkvm-input',
+                  type: 'text',
+                  value: String(mediaMic.filePath || ''),
+                  placeholder: T('media.micPath'),
+                  spellCheck: false,
+                  onChange: function (event) {
+                    updateMediaSettings({ mic: { filePath: event && event.target ? String(event.target.value) : '' } });
+                  },
+                })
+              : null,
+            mediaMic.mode !== 'off'
+              ? h(
+                  'div',
+                  { style: { display: 'flex', gap: '5px', flexWrap: 'wrap', alignItems: 'center' } },
+                  h('span', { className: 'apkvm-dim' }, T('media.micBackend')),
+                  mediaMicBackends.map(function (backend) {
+                    return actionBtn(backend, {
+                      key: 'mic-backend-' + backend,
+                      small: true,
+                      variant: mediaMic.backend === backend ? 'primary' : undefined,
+                      onClick: function () {
+                        updateMediaSettings({ mic: { backend: backend } });
+                      },
+                    });
+                  })
+                )
+              : null,
+            h('div', { className: 'apkvm-dim' }, T('media.back') + ': ' + String(mediaCamera.back || '') + ' · ' + T('media.front') + ': ' + String(mediaCamera.front || '')),
+            h(
+              'div',
+              { style: { display: 'flex', gap: '5px', flexWrap: 'wrap' } },
+              mediaCameraModes.map(function (mode) {
+                return actionBtn('▣ ' + mode, {
+                  key: 'camera-back-' + mode,
+                  small: true,
+                  variant: mediaCamera.back === mode ? 'primary' : undefined,
+                  onClick: function () {
+                    updateMediaSettings({ camera: { back: mode } });
+                  },
+                });
+              }),
+              mediaCameraModes.map(function (mode) {
+                return actionBtn('▢ ' + mode, {
+                  key: 'camera-front-' + mode,
+                  small: true,
+                  variant: mediaCamera.front === mode ? 'primary' : undefined,
+                  onClick: function () {
+                    updateMediaSettings({ camera: { front: mode } });
+                  },
+                });
+              })
+            ),
+            mediaPosterList.length
+              ? h(
+                  'div',
+                  { style: { display: 'flex', flexDirection: 'column', gap: '3px' } },
+                  mediaPosterList.map(function (poster) {
+                    return h(
+                      'div',
+                      { key: 'poster-' + poster.name, style: { display: 'flex', gap: '6px', alignItems: 'center', fontSize: '11px' } },
+                      h('span', { className: 'apkvm-dim', style: { minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' } }, poster.name + ' = ' + String(poster.path || '')),
+                      actionBtn('×', {
+                        key: 'poster-remove-' + poster.name,
+                        small: true,
+                        onClick: function () {
+                          removeMediaPoster(poster.name);
+                        },
+                      })
+                    );
+                  })
+                )
+              : null,
+            h(
+              'div',
+              { style: { display: 'flex', gap: '5px', flexWrap: 'wrap' } },
+              h('input', {
+                className: 'apkvm-input',
+                type: 'text',
+                value: mediaPosterName,
+                placeholder: T('media.posterName'),
+                spellCheck: false,
+                onChange: function (event) {
+                  setMediaPosterName(event && event.target ? String(event.target.value) : '');
+                },
+              }),
+              h('input', {
+                className: 'apkvm-input',
+                type: 'text',
+                value: mediaPosterPath,
+                placeholder: T('media.posterPath'),
+                spellCheck: false,
+                onChange: function (event) {
+                  setMediaPosterPath(event && event.target ? String(event.target.value) : '');
+                },
+              }),
+              actionBtn(T('media.posterAdd'), {
+                key: 'poster-add',
+                small: true,
+                disabled: !mediaPosterName.trim() || !mediaPosterPath.trim(),
+                onClick: addMediaPoster,
+              })
+            ),
+            h(
+              'div',
+              { style: { display: 'flex', gap: '5px', flexWrap: 'wrap' } },
+              actionBtn(mediaBusy ? '…' : T('media.apply'), {
+                key: 'media-save',
+                small: true,
+                disabled: mediaBusy,
+                onClick: function () {
+                  saveMediaSettings(false);
+                },
+              }),
+              actionBtn(T('media.applyRestart'), {
+                key: 'media-save-restart',
+                small: true,
+                variant: 'primary',
+                disabled: mediaBusy,
+                onClick: function () {
+                  saveMediaSettings(true);
+                },
+              })
+            ),
+            h('div', { className: 'apkvm-dim' }, T('media.hint')),
+            mediaSettings && mediaSettings.settingsPath ? h('div', { className: 'apkvm-dim' }, String(mediaSettings.settingsPath)) : null
+          )
+        );
+
+        var emulatorCard = h(
+          'details',
+          { className: 'apkvm-card apkvm-debug' },
+          h(
+            'summary',
+            { className: 'apkvm-debug-summary' },
+            h('span', { className: 'apkvm-card-title' }, T('emulators.title')),
+            h(
+              'span',
+              { className: 'apkvm-dim', style: { marginLeft: 'auto' } },
+              emulatorInventory
+                ? String(
+                    ((emulatorInventory.local && Array.isArray(emulatorInventory.local.avds) ? emulatorInventory.local.avds.length : 0) +
+                      (Array.isArray(emulatorInventory.remotes) ? emulatorInventory.remotes.length : 0))
+                  )
+                : emulatorBusy
+                  ? '…'
+                  : ''
+            ),
+            h('span', { className: 'apkvm-chevron', 'aria-hidden': 'true' }, '▸')
+          ),
+          h(
+            'div',
+            { className: 'apkvm-debug-body' },
+            h(
+              'div',
+              { style: { display: 'flex', gap: '5px' } },
+              actionBtn(emulatorBusy ? '…' : T('emulators.refresh'), {
+                key: 'emulators-refresh',
+                small: true,
+                disabled: emulatorBusy,
+                onClick: loadEmulatorInventory,
+              })
+            ),
+            h('div', { className: 'apkvm-dim' }, T('emulators.local')),
+            emulatorInventory && emulatorInventory.local && Array.isArray(emulatorInventory.local.avds) && emulatorInventory.local.avds.length
+              ? h(
+                  'div',
+                  null,
+                  emulatorInventory.local.avds.map(function (avd) {
+                    return h(
+                      'div',
+                      { key: 'emu-local-' + avd.name, className: 'apkvm-dim', style: { fontSize: '11px' } },
+                      String(avd.name || '') + (avd.target ? ' · ' + avd.target : '') + (avd.abi ? ' · ' + avd.abi : '')
+                    );
+                  })
+                )
+              : h('div', { className: 'apkvm-dim', style: { fontSize: '11px' } }, T('emulators.empty')),
+            Array.isArray(emulatorInventory && emulatorInventory.remotes) && emulatorInventory.remotes.length
+              ? h(
+                  'div',
+                  null,
+                  emulatorInventory.remotes.map(function (remote) {
+                    var host = remote && remote.profile ? remote.profile.host : '';
+                    return h(
+                      'div',
+                      { key: 'emu-remote-' + host, className: 'apkvm-dim', style: { fontSize: '11px' } },
+                      String(host || '') +
+                        ' · ' +
+                        (remote && remote.ok
+                          ? (remote.avds || [])
+                              .map(function (avd) {
+                                return avd.name;
+                              })
+                              .join(', ')
+                          : T('emulators.hostDown'))
+                    );
+                  })
+                )
               : null
           )
         );
@@ -7174,7 +7893,7 @@ window.__ModuleLoader__.load({
           toastBanner,
           h(
             'div',
-            { className: 'apkvm-body' },
+            { className: 'apkvm-body' + (wideDashboard ? ' apkvm-dashboard' : '') },
             h(
               'aside',
               { className: 'apkvm-aside apkvm-scroll' },
@@ -7182,20 +7901,25 @@ window.__ModuleLoader__.load({
               apkCard,
               instancesCard,
               ownerCard,
-              activityCard,
-              debugCard,
+              wideDashboard ? null : activityCard,
+              wideDashboard ? null : debugCard,
               flowCard,
               skillCard,
               networkCard,
               storageCard,
               snapshotCard,
               remoteCard,
+              mediaCard,
+              emulatorCard,
               appsCard,
               diagCard,
               h('div', { className: 'apkvm-footnote', title: T('hint.boot') }, T('hint.short')),
               h('span', { className: 'apkvm-sr-only' }, T('hint.boot'))
             ),
-            stageEl
+            stageEl,
+            wideDashboard
+              ? h('aside', { className: 'apkvm-side apkvm-scroll' }, activityCard, debugCard)
+              : null
           ),
           dragging
             ? h(

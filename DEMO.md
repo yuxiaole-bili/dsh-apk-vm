@@ -83,14 +83,17 @@ first `init` in about 1 s, `width`/`height` matching the current orientation.
   the 16-byte variant some AVD images emit (same header plus four extra bytes); the encoder
   detects the layout from the file size. A `--scale 0.5` produces a smaller mobile-friendly
   file; `--colors 128 --palette local` improves gradients at a slightly larger size.
-- `docs/screenshot-panel.png`: main panel with the Environment + APK cards and the phone frame
-  (checked in).
-- `docs/screenshot-sidebar.png`: the plugin inside the right sidebar next to a session (checked in).
+- `docs/screenshot-panel.png`: main panel with the Environment, APK files, ownership, Activity
+  and Rooted debug cards plus the phone frame (checked in).
+- `docs/screenshot-activity.png`, `docs/screenshot-device.png`, `docs/screenshot-environment.png`,
+  `docs/screenshot-apk-files.png`, `docs/screenshot-debug.png`: close-ups of the cards and the
+  guest (checked in).
 - `docs/demo.gif`: the loop itself — home screen → sample APK installed and driven through the
   HTTP API → 60 fps animation in the guest (checked in; see the command above).
-- Optional extra captures that are **not** checked in: an expanded green Environment card, and
-  the Rooted debug card with `ui_dump`/`perf`/record output. Re-capture them from your own host
-  before publishing new ones; keep the same 720–1280 px / PNG style.
+- Screenshots are captured from the 0.12.0 UI with demo data only; the Windows user name, real
+  APK names/paths and the assistant avatar are masked with Gaussian blur (Pillow) before
+  publishing. Re-capture them from your own host before publishing new ones; keep the same
+  720–1280 px / PNG style.
 
 ## Acceptance checklist
 

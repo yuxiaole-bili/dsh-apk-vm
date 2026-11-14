@@ -45,7 +45,7 @@ same-origin, loopback-only debug HTTP API and an `apk_vm` Agent tool.
 > 当前 **Windows x64 与 Linux x86_64（headless）为端到端已验证平台**；macOS 仅做探测/CI
 > 覆盖，详见 `docs/LINUX-E2E.md`。
 
-**Status:** `0.12.0` · Apache-2.0 · no npm runtime dependencies · no build step.
+**Status:** `0.12.1` · Apache-2.0 · no npm runtime dependencies · no build step.
 
 This is an open-source DSH plugin published on npm as **`dsh-apk-vm`**. Repository:
 [github.com/yuxiaole-bili/dsh-apk-vm](https://github.com/yuxiaole-bili/dsh-apk-vm).
@@ -130,11 +130,14 @@ and Agent-facing UI automation for development workflows.
 
 ## Demo / visible proof
 
-Real screenshots from the reference host:
+Real screenshots from the reference host (0.12.0 UI; the Windows user name, real APK names/paths
+and the assistant avatar are Gaussian-blurred):
 
 ![APK VM main panel](docs/screenshot-panel.png)
 
-![APK VM in the right sidebar](docs/screenshot-sidebar.png)
+![Agent and user activity journal](docs/screenshot-activity.png)
+
+![The sample APK running inside the Android guest](docs/screenshot-device.png)
 
 28-second capture of the loop: home screen → sample APK installed and driven by the API →
 60 fps animation in the guest (720×1280, 3.2 MiB):
@@ -143,8 +146,12 @@ Real screenshots from the reference host:
 
 | Asset | Status |
 | --- | --- |
-| `docs/screenshot-panel.png` | ✅ main panel: Environment, guest H.264, controls |
-| `docs/screenshot-sidebar.png` | ✅ right-sidebar layout next to a session |
+| `docs/screenshot-panel.png` | ✅ main panel: Environment, APK files, ownership, Activity, rooted debug, guest H.264 |
+| `docs/screenshot-activity.png` | ✅ Activity card: agent + user operations with screenshot thumbnails |
+| `docs/screenshot-device.png` | ✅ guest running the sample APK on the H.264 canvas |
+| `docs/screenshot-environment.png` | ✅ Environment self-check card |
+| `docs/screenshot-apk-files.png` | ✅ APK files / remembered installs card |
+| `docs/screenshot-debug.png` | ✅ Rooted debug toolbox card |
 | `docs/demo.gif` | ✅ 28 s loop (720×1280, 3.2 MiB); reproducible from the guest-side screencap loop in [DEMO.md](DEMO.md) |
 
 The [Performance](#performance) and [Verification](#verification) sections list exactly what was
@@ -254,6 +261,27 @@ key {"text":"HOME"}       -> returned to launcher
   Environment card lists all adb devices (emulator, USB/physical, network) and can attach one at
   runtime. Detach restores the managed AVD identity. Live state, serial, boot mode/time, and a
   bounded diagnostic log are shown.
+- **Remote VM hosts over SSH (multiple concurrent sessions, 远端虚拟机).** Any SSH-reachable
+  macOS/Linux/Windows box can back one or more VM sessions: the plugin keeps validated profiles
+  under `<profile>/.apk-vm/remote-profiles.json` (host/user/ports/AVD, never the key contents),
+  forwards a loopback port to the remote emulator's adb port, runs `adb connect` and attaches the
+  device, so the same panel/H.264/input/debug surface drives the remote guest. Up to
+  `remoteMaxSessions` sessions can run at once, each with its own AVD; `launch: true` starts a
+  fixed headless emulator on the remote host over the same SSH connection and `disconnect` stops
+  it again. The panel lists saved profiles and live sessions with per-session connect/disconnect.
+  See [Multiple instances, physical devices and snapshots](#multiple-instances-physical-devices-and-snapshots).
+- **Available emulator inventory.** `GET /apk-vm/emulators` returns one merged table of local AVDs
+  (name, target, ABI, RAM, LCD, snapshot count, running state, size) plus the AVDs and adb devices
+  of every saved remote host, so you can see what can be started before spawning anything.
+- **Virtual camera.** Configure the guest camera (`-camera-back` / `-camera-front`: `emulated`,
+  `virtualscene`, `webcam`, `none`) and feed the virtual scene with PNG/JPEG posters
+  (`-virtualscene-poster`). The panel's Media card manages the modes and poster list; settings
+  apply to newly spawned instances and to the default VM after a restart.
+- **Virtual microphone.** Microphone modes: `off`, `host` (pass a host input device through to the
+  guest; Windows/Linux/macOS) and `file` (loop an audio file into a virtual PulseAudio source;
+  Linux hosts and remote SSH hosts). Configure it in the panel Media card, through
+  `/apk-vm/mic`, or with `cfg.mic`; remote sessions upload posters/audio to
+  `/tmp/apk-vm-media/<id>` over the same SSH connection.
 - **APK discovery + one-click install.** Recursively finds `*.apk` under the configured roots,
   reads package name / label / launcher activity with `aapt2 dump badging`, then runs
   `adb install -r` and launches the app with `am start`.
@@ -444,9 +472,19 @@ or `project`), session id, workspace, and `since` / `lastSeenAt` timestamps; lea
   idle-stopped after `instanceIdleMs`; the AVD is kept for quick reuse.
 - **Physical / network devices.** `GET /apk-vm/devices` lists adb devices;
   `POST /apk-vm/device {"serial":"…"}` attaches an online USB/physical/network device and
-  detaches back to the managed AVD with `{"serial":""}`. `GET/POST /apk-vm/remote` manages an
-  SSH adb tunnel (`allowRemote` / `remote` config; never a shell). The Environment card offers
-  the same attach/detach actions.
+  detaches back to the managed AVD with `{"serial":""}`. The Environment card offers the same
+  attach/detach actions.
+- **Remote VM host (SSH proxy).** `GET/POST /apk-vm/remote` runs the guest behind an SSH host:
+  an `ssh -N -L` loopback tunnel forwards the remote emulator's adb port, `adb connect
+  127.0.0.1:<localPort>` registers it and the normal attach/boot-wait path runs, so the panel
+  streams the remote guest over the same H.264 channel. `POST {"action":"connect","host","user",
+  "keyPath"?,"remotePort":5558,"avdName"?,"launch":true}` optionally starts a **fixed headless
+  emulator** on the remote host (`-no-window -no-audio -no-boot-anim -gpu
+  swiftshader_indirect`) over the same SSH connection; `{"action":"disconnect",
+  "stopEmulator":true}` also kills an emulator the plugin launched. The validated profile has no
+  secrets (the SSH key path stays on this host) and is persisted under
+  `<profile>/.apk-vm/remote-profile.json`, so the panel card prefills after a restart. Only the
+  fixed command shape is executed; every value is validated and single-quote escaped.
 - **Named AVD snapshots.** `GET /apk-vm/snapshots` lists snapshots;
   `POST /apk-vm/snapshots {"action":"save|load|delete","name":"…"}` manages them. The quick-boot
   snapshot (`snapshotName`, default `default_boot`) is handled automatically. The panel's
@@ -741,6 +779,9 @@ All keys are optional; defaults are shown in the **Default** column.
 | `prewarmDelayMs` | `3000` | Delay before the prewarm start. |
 | `autoStart` | `true` | Start the VM on the first `/apk-vm/state` or `/apk-vm/frame` request. |
 | `autoReinstall` | `true` | Remember APKs installed through the plugin and reinstall missing ones on the next boot (registry in `<profile>/.apk-vm/installed-apps.json`, archived APKs in `<profile>/.apk-vm/apks`). Set `false` to opt out. |
+| `remoteMaxSessions` | `4` | Maximum concurrent remote SSH VM sessions (1–16). |
+| `camera` | `{ back: "emulated", front: "none", posters: [] }` | Guest camera modes and virtual-scene poster list (`posters` entries: `{name, path}`). |
+| `mic` | `{ mode: "off" }` | Guest microphone: `off` / `host` (host input passthrough) / `file` (loop an audio file into a virtual source; Linux and remote hosts). Optional `backend`, `filePath`. |
 | `multiInstance` | `true` | Allow isolated extra VMs for concurrent Agents. |
 | `maxInstances` | `3` | Maximum number of extra instances (in addition to the default VM). Each running instance costs guest RAM/CPU. |
 | `instanceIdleMs` | `900000` | Stop an extra instance after this long without panel frames, a video client, or an Agent command (AVD is kept). |
@@ -862,7 +903,10 @@ JSON bodies are bounded to 64 KiB; the raw APK upload is bounded to 500 MiB.
 | GET/HEAD | `/apk-vm/apk-icon?path=…` | Extract the raster launcher icon from the APK ZIP (PNG/WebP/JPEG). |
 | GET | `/apk-vm/devices` | List adb devices (`serial`, `state`, `kind`, `model`, `product`, transport) plus current/managed-device metadata. |
 | POST | `/apk-vm/device` | `{"serial":"<adb-serial>"}` attach an online physical/network device; `{"serial":""}` detach and restore the managed AVD. |
-| GET/POST | `/apk-vm/remote` | SSH adb tunnel: `POST {"action":"connect","host","user","keyPath"?,"remotePort":5558}` or `{"action":"disconnect"}`; `GET` returns tunnel status. |
+| GET/POST | `/apk-vm/remote` | Multi-session SSH-proxied VMs: `POST {"action":"connect","profile":{host,user,keyPath?,sshPort?,remotePort?,avdName?,launch?},"connectTimeoutMs"?}`, `{"action":"disconnect","id"?,"stopEmulator"?,"detachDevice"?}`, `{"action":"remove-session","id"?}`, `{"action":"status"}`, `{"action":"save-profile"}`, `{"action":"forget-profile","id"?}`; `GET` returns `{sessions,profiles,counts,…}`. |
+| GET | `/apk-vm/emulators` | Merged local + remote emulator inventory (`local`, `remotes[]`, `updatedAt`). |
+| GET/POST | `/apk-vm/camera` | Virtual camera settings: `POST {"action":"save"|"apply","camera":{back,front,posters[]},"restart"?}`. |
+| GET/POST | `/apk-vm/mic` | Virtual microphone settings: `POST {"action":"save"|"apply","mic":{mode,backend,filePath},"restart"?}`. |
 | POST | `/apk-vm/vm` | `{"action":"start"\|"stop"\|"restart"\|"snapshot"}`. |
 | POST | `/apk-vm/install` | `{"path":"C:/path/app.apk"}` → install + launch. |
 | POST | `/apk-vm/upload` | Raw APK/APKS/XAPK/AAB bytes (≤ 500 MiB) with the file name in the `x-apk-name` header → validate ZIP/APK magic, write to the OS temp dir, install + launch. |
@@ -1355,11 +1399,16 @@ not a public issue.
 The features below are **not shipped yet** — they are tracked for future releases. Everything
 described above is implemented in this release.
 
-- **Physical-device attach is available but not exhaustively verified.** `/apk-vm/devices` +
-  `/apk-vm/device` and the SSH adb tunnel are shipped; per-device quirks (OEM adb authorization,
-  screen size/orientation, root availability) still need a device-specific smoke test.
+- **Physical-device attach and the remote VM proxy are shipped but not exhaustively verified.**
+  `/apk-vm/devices` + `/apk-vm/device` and the SSH-proxied `/apk-vm/remote` path (loopback
+  tunnel, `adb connect`, attach/boot-wait, optional fixed headless emulator launch) are
+  implemented and covered hermetically by `spike/remote-test.mjs`; per-device/per-host quirks
+  (OEM adb authorization, screen size/orientation, root availability, a host without an
+  emulator binary) still need an environment-specific smoke test.
 - **Audio streaming** — forward guest audio alongside the video stream.
-- **Cloud / remote VM execution** — run the guest on a remote host and stream it to the panel.
+- **Cloud runners** — a managed cloud VM service. The SSH-proxied remote host path is already
+  available (see [Multiple instances, physical devices and snapshots](#multiple-instances-physical-devices-and-snapshots)),
+  but it expects an Android SDK/emulator on a host you control rather than provisioning one.
 
 QEMU + Android-x86 for hosts without hardware virtualization and `-writable-system` image
 customization remain research notes in [DESIGN.md](DESIGN.md) §8.
@@ -1367,6 +1416,15 @@ customization remain research notes in [DESIGN.md](DESIGN.md) §8.
 ---
 
 ## Known limitations
+- **Remote multi-session needs distinct AVDs.** Android refuses to run a second emulator on the
+  same AVD unless every instance was started with `-read-only`; the plugin therefore expects a
+  separate AVD per remote session (clone the AVD on the remote host if needed).
+- **The virtual camera is not a file-to-camera bridge.** Supported inputs are the emulator's
+  built-in virtual scene (with PNG/JPEG posters) and host webcams; arbitrary video files are not
+  injected as camera frames.
+- **The virtual microphone `file` mode needs a Linux/PulseAudio host.** On Windows only `host`
+  passthrough is available, and camera/mic changes apply to a running default VM only after it is
+  restarted.
 
 - **Windows x64 and Linux x86_64 are the end-to-end verified platforms.** macOS SDK/adb/
   emulator/AVD discovery is implemented and `arm64` hosts automatically select the

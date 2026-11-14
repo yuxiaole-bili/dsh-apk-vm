@@ -18,6 +18,7 @@ import { createReadStream, existsSync, readFileSync, realpathSync } from 'node:f
 import { promises as fsp } from 'node:fs';
 import net from 'node:net';
 import os from 'node:os';
+import { spawn } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -40,11 +41,13 @@ import { collectStorage, cleanTempFiles, cleanSnapshots, cleanOrphanAvds, format
 import { buildApksFromAab, aabInfo, detectBundletool } from './lib/aab.js';
 import { readHarFile, summarizeHar, filterHar, toCurl } from './lib/har.js';
 import { runAssertions, compareScreenshot, createTestReport, reportMarkdown } from './lib/ui-tests.js';
-import { SshAdbTunnel } from './lib/remote.js';
+import { RemoteProfileBook, RemoteSessionManager, defaultRemoteProfilesPath, normalizeRemoteProfile, buildSshCommandArgs, quoteRemoteArg, runSshCommand } from './lib/remote.js';
 import { CdpBridge, previewJsValue } from './lib/cdp.js';
 import { losslessJson } from './lib/json-safe.js';
 import { ActivityLog } from './lib/activity-log.js';
 import { InstalledAppRegistry, defaultInstalledAppsPath, reinstallMissingApps, summarizeReinstallResult } from './lib/installed-apps.js';
+import { normalizeCameraConfig, normalizeMicConfig, checkPosterFile, mediaLaunchOptions, cameraCapabilities, micCapabilities, micSourceName, remoteAudioPath, remoteMediaPaths, remotePosterPath } from './lib/media.js';
+import { collectLocalInventory, collectRemoteInventory, buildEmulatorInventory } from './lib/emulator-inventory.js';
 
 const PLUGIN_VERSION = (() => {
   try {
@@ -67,6 +70,33 @@ const UPLOAD_LIMIT_BYTES = 500 * 1024 * 1024;
 const FRAME_TTL_MS = 200;
 /** Cache `wm size` for a while to keep the 2 s status poll cheap. */
 const SCREEN_TTL_MS = 15_000;
+/** Media (virtual camera / mic) settings live next to the activity journal. */
+const MEDIA_SETTINGS_VERSION = 1;
+const DEFAULT_CAMERA_CONFIG = { back: 'emulated', front: 'none', posters: [] };
+const DEFAULT_MIC_CONFIG = { mode: 'off' };
+
+function mediaSettingsPath(dataRoot) {
+  return path.join(dataRoot, '.apk-vm', 'media.json');
+}
+
+// Media settings are read synchronously so the default AndroidVm can be built
+// with its camera/mic launch arguments before the first boot. A corrupt or
+// partially written file falls back to the built-in defaults.
+function loadMediaSettings(dataRoot, cfg) {
+  let stored = null;
+  try {
+    stored = JSON.parse(readFileSync(mediaSettingsPath(dataRoot), 'utf8'));
+  } catch {
+    stored = null;
+  }
+  const cameraInput = { ...DEFAULT_CAMERA_CONFIG, ...(cfg.camera && typeof cfg.camera === 'object' ? cfg.camera : {}), ...(stored && stored.camera && typeof stored.camera === 'object' ? stored.camera : {}) };
+  const micInput = { ...DEFAULT_MIC_CONFIG, ...(cfg.mic && typeof cfg.mic === 'object' ? cfg.mic : {}), ...(stored && stored.mic && typeof stored.mic === 'object' ? stored.mic : {}) };
+  try {
+    return { camera: normalizeCameraConfig(cameraInput), mic: normalizeMicConfig(micInput) };
+  } catch {
+    return { camera: normalizeCameraConfig(DEFAULT_CAMERA_CONFIG), mic: normalizeMicConfig(DEFAULT_MIC_CONFIG) };
+  }
+}
 
 function isReady(vm) {
   return vm && vm.state === 'ready';
@@ -271,6 +301,11 @@ function resolveApkPath(candidate, roots) {
 export function apply(ctx, config = {}) {
   const cfg = config && typeof config === 'object' ? config : {};
   ALLOW_REMOTE = cfg.allowRemote === true;
+  // Media settings must be known before the default AndroidVm is constructed:
+  // camera/mic flags are part of the emulator launch argv.
+  const dataRoot = resolveRoots(ctx, cfg.roots)[0] || process.cwd();
+  const mediaSettings = loadMediaSettings(dataRoot, cfg);
+  const initialMedia = mediaLaunchOptions(mediaSettings);
   const vm = new AndroidVm({
     sdkRoot: cfg.sdkRoot || process.env.ANDROID_HOME || process.env.ANDROID_SDK_ROOT || undefined,
     adbPath: cfg.adbPath || undefined,
@@ -279,6 +314,8 @@ export function apply(ctx, config = {}) {
     serial: cfg.serial || undefined,
     port: cfg.port || undefined,
     emulatorArgs: Array.isArray(cfg.emulatorArgs) ? cfg.emulatorArgs : undefined,
+    extraEmulatorArgs: initialMedia.extraEmulatorArgs,
+    enableAudio: initialMedia.enableAudio,
     spawnEmulator: cfg.spawnEmulator !== false,
     apkRoots: Array.isArray(cfg.roots) ? cfg.roots : undefined,
     bootTimeoutMs: cfg.bootTimeoutMs || undefined,
@@ -315,6 +352,8 @@ export function apply(ctx, config = {}) {
           dnsServers: Array.isArray(cfg.dnsServers) ? cfg.dnsServers.map(String) : undefined,
           networkMode: cfg.networkMode || undefined,
           tcpdumpPath: cfg.tcpdumpPath || undefined,
+          // Read at create() time so a media change applies to the next instance.
+          mediaOptionsProvider: () => mediaLaunchOptions(mediaSettings),
           log: (line) => vm._pushLog(line),
         });
 
@@ -347,7 +386,6 @@ export function apply(ctx, config = {}) {
     });
   }
   let installInFlight = null;
-  let remoteTunnel = null;
   let startKick = null;
   let autoStartKicked = false;
   // Provisioning completion gets its own one-shot kick: a partially configured host can
@@ -869,6 +907,189 @@ export function apply(ctx, config = {}) {
   const appRegistry = new InstalledAppRegistry({
     file: defaultInstalledAppsPath(rootsFor()[0] || process.cwd()),
   });
+  // Saved remote VM hosts (SSH profiles) + live remote sessions. The session
+  // manager owns tunnel/instance lifecycle and registers remote instances into
+  // the same instance list as local extras (see lib/remote-instance.js).
+  const remoteProfileBook = new RemoteProfileBook({
+    file: defaultRemoteProfilesPath(dataRoot),
+  });
+  const remoteManager = new RemoteSessionManager({
+    dataDir: dataRoot,
+    profiles: remoteProfileBook,
+    instances: instanceManager,
+    sdkRoot: vm.sdkRoot,
+    adbPath: vm.adbPath,
+    scrcpyJarPath: SCRCPY_JAR,
+    scrcpyMaxSize: cfg.scrcpyMaxSize || 960,
+    scrcpyBitrate: cfg.scrcpyBitrate || 6000000,
+    scrcpyMaxFps: cfg.scrcpyMaxFps || 60,
+    maxSessions: cfg.remoteMaxSessions || 4,
+    log: (line) => vm._pushLog(line),
+  });
+  // Sessions that received a file-loop virtual microphone; disconnect stops it.
+  const remoteMicSessions = new Set();
+
+  async function remoteState() {
+    const [state, listed] = await Promise.all([
+      remoteManager.remoteState(),
+      vm.listDevices().catch(() => ({ ok: false, devices: [] })),
+    ]);
+    const sessions = Array.isArray(state.sessions) ? state.sessions : [];
+    const profiles = Array.isArray(state.profiles) ? state.profiles : [];
+    return {
+      ...state,
+      ok: true,
+      counts: state.counts || {
+        sessions: sessions.length,
+        connected: sessions.filter((item) => item.state === 'connected').length,
+      },
+      // Legacy single-session aliases kept for older panel builds.
+      tunnel: sessions.length && sessions[0].tunnel ? sessions[0].tunnel : null,
+      launch: sessions.length ? sessions[0] : null,
+      profile: profiles[0] || null,
+      profileError: state.profilesError || null,
+      vm: await vm.status(),
+      devices: Array.isArray(listed.devices) ? listed.devices : [],
+    };
+  }
+
+  // Persisted virtual camera / microphone settings for the local default VM.
+  async function persistMediaSettings() {
+    try {
+      const target = mediaSettingsPath(dataRoot);
+      await fsp.mkdir(path.dirname(target), { recursive: true });
+      const tmp = `${target}.${process.pid}.${Date.now()}.tmp`;
+      const payload = {
+        version: MEDIA_SETTINGS_VERSION,
+        updatedAt: new Date().toISOString(),
+        camera: mediaSettings.camera,
+        mic: mediaSettings.mic,
+      };
+      await fsp.writeFile(tmp, `${JSON.stringify(payload, null, 2)}\n`, 'utf8');
+      await fsp.rename(tmp, target);
+      return { ok: true };
+    } catch (error) {
+      return { ok: false, error: error && error.message ? error.message : String(error) };
+    }
+  }
+
+  function mediaStateBody() {
+    return {
+      ok: true,
+      version: MEDIA_SETTINGS_VERSION,
+      camera: mediaSettings.camera,
+      mic: mediaSettings.mic,
+      launch: mediaLaunchOptions(mediaSettings),
+      settingsPath: mediaSettingsPath(dataRoot),
+      capabilities: { camera: cameraCapabilities(), mic: micCapabilities() },
+    };
+  }
+
+  // Arm the current settings on every VM; a restart is what makes emulator
+  // launch flags (camera/mic) take effect, and the panel decides when to do it.
+  function applyMediaSettingsToDefaultVm() {
+    const media = mediaLaunchOptions(mediaSettings);
+    try {
+      vm.extraEmulatorArgs = media.extraEmulatorArgs;
+      vm.enableAudio = media.enableAudio === true;
+    } catch {
+      /* best effort */
+    }
+    let applied = 0;
+    try {
+      applied = instanceManager.applyMediaOptions(media).applied;
+    } catch {
+      /* best effort */
+    }
+    return { ok: true, applied, media: { extraEmulatorArgs: media.extraEmulatorArgs, enableAudio: media.enableAudio } };
+  }
+
+  async function restartDefaultVmForMedia() {
+    try {
+      await vm.stop();
+    } catch {
+      /* already stopped */
+    }
+    await vm.start();
+    return { ok: true, vm: await vm.status() };
+  }
+
+  // Media args for a remote headless launch (camera posters are rewritten to
+  // remote paths before they are passed to the emulator command).
+  function remoteLaunchMedia(config) {
+    const source = config || mediaSettings;
+    const launch = mediaLaunchOptions(source);
+    const warnings = [];
+    if (source.mic && source.mic.mode === 'file' && process.platform === 'win32') {
+      warnings.push('file-loop microphone input needs a PulseAudio host; use host mode on Windows');
+    }
+    return { extraEmulatorArgs: launch.extraEmulatorArgs, enableAudio: launch.enableAudio, warnings };
+  }
+
+  // Stream a local file to the remote host through the session's SSH profile.
+  async function uploadToRemote(profile, localPath, remotePath) {
+    const args = buildSshCommandArgs(profile, `mkdir -p ${quoteRemoteArg(path.posix.dirname(remotePath))} && cat > ${quoteRemoteArg(remotePath)}`);
+    const data = await fsp.readFile(localPath);
+    await new Promise((resolve, reject) => {
+      const child = spawn('ssh', args, { stdio: ['pipe', 'ignore', 'pipe'], windowsHide: true });
+      let stderr = '';
+      child.stderr.on('data', (chunk) => {
+        stderr = `${stderr}${chunk.toString('utf8')}`.slice(-8192);
+      });
+      child.on('error', reject);
+      child.on('close', (code) => {
+        if (code === 0) resolve();
+        else reject(new Error((stderr.trim() || `ssh exited with code ${code}`).slice(0, 400)));
+      });
+      child.stdin.on('error', () => {});
+      child.stdin.end(data);
+    });
+  }
+
+  function remoteMicEnv() {
+    const media = remoteMediaPaths(dataRoot);
+    const source = micSourceName(dataRoot);
+    return { media, sourceName: source, sinkName: `${source}_sink`, rate: 48000, channels: 1 };
+  }
+
+  // PulseAudio virtual microphone without sudo: loop the audio file into a
+  // null-sink and remap its monitor to a real source (module-pipe-source is not
+  // available on the reference remote host).
+  function buildRemoteMicStartCommand(audioPath) {
+    const env = remoteMicEnv();
+    const q = (value) => quoteRemoteArg(value);
+    const sourceArg = q(`source_name=${env.sourceName}`);
+    const sinkArg = q(`sink_name=${env.sinkName}`);
+    return [
+      'set -u',
+      `mkdir -p -- ${q(env.media.dir)} ${q(env.media.audioDir)}`,
+      `if [ -f ${q(env.media.pidFile)} ]; then kill "$(cat ${q(env.media.pidFile)})" 2>/dev/null || true; rm -f ${q(env.media.pidFile)}; fi`,
+      `_idx=$(pactl list short modules 2>/dev/null | grep -F ${sourceArg} | cut -f1 | head -n 1); [ -n "$_idx" ] && pactl unload-module "$_idx" >/dev/null 2>&1 || true`,
+      `_sink=$(pactl list short modules 2>/dev/null | grep -F ${sinkArg} | cut -f1 | head -n 1); [ -n "$_sink" ] && pactl unload-module "$_sink" >/dev/null 2>&1 || true`,
+      `pactl load-module module-null-sink ${sinkArg} rate=${env.rate} channels=${env.channels} >/dev/null 2>&1 || exit 1`,
+      `pactl load-module module-remap-source master=${q(env.sinkName + '.monitor')} ${sourceArg} channels=${env.channels} >/dev/null 2>&1 || exit 1`,
+      `ffmpeg -nostdin -hide_banner -loglevel error -re -stream_loop -1 -i ${q(audioPath)} -f s16le -ar ${env.rate} -ac ${env.channels} - 2> ${q(env.media.logFile)} | pacat --playback --raw --format=s16le --rate=${env.rate} --channels=${env.channels} --device=${q(env.sinkName)} >/dev/null 2>&1 &`,
+      `echo $! > ${q(env.media.pidFile)}`,
+      'sleep 1',
+      `pactl set-default-source ${sourceArg} >/dev/null 2>&1 || true`,
+      `pactl list short sources 2>/dev/null | cut -f2 | grep -Fx ${q(env.sourceName)} || exit 1`,
+    ].join('\n');
+  }
+
+  function buildRemoteMicStopCommand() {
+    const env = remoteMicEnv();
+    const q = (value) => quoteRemoteArg(value);
+    const sourceArg = q(`source_name=${env.sourceName}`);
+    const sinkArg = q(`sink_name=${env.sinkName}`);
+    return [
+      'set -u',
+      `if [ -f ${q(env.media.pidFile)} ]; then kill "$(cat ${q(env.media.pidFile)})" 2>/dev/null || true; sleep 1; kill -9 "$(cat ${q(env.media.pidFile)})" 2>/dev/null || true; rm -f ${q(env.media.pidFile)}; fi`,
+      `_idx=$(pactl list short modules 2>/dev/null | grep -F ${sourceArg} | cut -f1 | head -n 1); [ -n "$_idx" ] && pactl unload-module "$_idx" >/dev/null 2>&1 || true`,
+      `_sink=$(pactl list short modules 2>/dev/null | grep -F ${sinkArg} | cut -f1 | head -n 1); [ -n "$_sink" ] && pactl unload-module "$_sink" >/dev/null 2>&1 || true`,
+      'pactl set-default-source auto_null.monitor >/dev/null 2>&1 || true',
+    ].join('\n');
+  }
+
   const snapshotApk = () => (lastApk ? { ...lastApk } : null);
 
   function rememberInstalledApp(apkPath, meta, instanceId = 'default') {
@@ -1376,6 +1597,8 @@ export function apply(ctx, config = {}) {
       '/apk-vm/avd',
       '/apk-vm/devices',
       '/apk-vm/device',
+      '/apk-vm/camera',
+      '/apk-vm/mic',
       '/apk-vm/remote',
       '/apk-vm/vm',
       '/apk-vm/install',
@@ -1478,6 +1701,14 @@ export function apply(ctx, config = {}) {
       } else if (key === '/vm') {
         action = 'vm';
         summary = `VM ${activityText(b.action, 30) || 'request'}`;
+      } else if (key === '/camera') {
+        action = 'camera';
+        const config = b.config && typeof b.config === 'object' ? b.config : b;
+        summary = `camera ${activityText(b.action, 20) || 'save'} (back=${activityText(config.back, 20) || '?'})`;
+      } else if (key === '/mic') {
+        action = 'mic';
+        const config = b.config && typeof b.config === 'object' ? b.config : b;
+        summary = `mic ${activityText(b.action, 20) || 'save'} (${activityText(config.mode, 20) || '?'})`;
       } else if (key === '/install') {
         action = 'install';
         summary = `install ${activityText(String(b.path || '').split(/[\\/]/).pop(), 100) || 'APK'}`;
@@ -3072,9 +3303,111 @@ export function apply(ctx, config = {}) {
       sendJson(res, 200, { ok: true, attached: serial, vm: await vm.status(), devices: await vm.listDevices() });
     });
 
+    // ---------------------------------------------------------------------
+    // Virtual camera + microphone settings for the local default VM.
+    //
+    // The emulator only accepts these flags on (re)launch, so `save` persists
+    // the settings and `apply` arms them for the next boot; `restart:true`
+    // reboots the default VM immediately.
+    // ---------------------------------------------------------------------
+    register('/apk-vm/camera', async (req, res) => {
+      if (req.method === 'GET') {
+        sendJson(res, 200, mediaStateBody());
+        return;
+      }
+      if (req.method !== 'POST') {
+        sendError(res, 405, 'GET or POST only');
+        return;
+      }
+      try {
+        const body = await readJsonBody(req);
+        const action = String(body.action || 'save').toLowerCase();
+        if (action !== 'save' && action !== 'apply') {
+          sendError(res, 400, `unsupported action: ${action}`);
+          return;
+        }
+        const cameraSource =
+          body.config && typeof body.config === 'object'
+            ? body.config
+            : body.camera && typeof body.camera === 'object'
+              ? body.camera
+              : body;
+        mediaSettings.camera = normalizeCameraConfig(cameraSource);
+        // Fail fast on missing/unreadable posters: the emulator would otherwise only print a
+        // cryptic -virtualscene-poster error on the next (re)launch. Checked here so both
+        // `save` and `apply` report the offending poster path.
+        for (const poster of mediaSettings.camera.posters) {
+          const checked = await checkPosterFile(poster.path);
+          if (!checked || checked.ok !== true) {
+            throw new Error(`camera poster "${poster.name}" is unavailable: ${(checked && checked.reason) || 'unknown error'}`);
+          }
+        }
+        const saved = await persistMediaSettings();
+        if (!saved.ok) throw new Error(saved.error);
+        const applied = action === 'apply';
+        if (applied) applyMediaSettingsToDefaultVm();
+        const restarted = applied && body.restart === true;
+        if (restarted) await restartDefaultVmForMedia();
+        sendJson(res, 200, { ...mediaStateBody(), saved: true, applied, restarted });
+      } catch (error) {
+        sendError(res, 400, error && error.message ? error.message : String(error));
+      }
+    });
+
+    register('/apk-vm/mic', async (req, res) => {
+      if (req.method === 'GET') {
+        sendJson(res, 200, mediaStateBody());
+        return;
+      }
+      if (req.method !== 'POST') {
+        sendError(res, 405, 'GET or POST only');
+        return;
+      }
+      try {
+        const body = await readJsonBody(req);
+        const action = String(body.action || 'save').toLowerCase();
+        if (action !== 'save' && action !== 'apply') {
+          sendError(res, 400, `unsupported action: ${action}`);
+          return;
+        }
+        const micSource =
+          body.config && typeof body.config === 'object'
+            ? body.config
+            : body.mic && typeof body.mic === 'object'
+              ? body.mic
+              : body;
+        mediaSettings.mic = normalizeMicConfig(micSource);
+        const saved = await persistMediaSettings();
+        if (!saved.ok) throw new Error(saved.error);
+        const applied = action === 'apply';
+        if (applied) applyMediaSettingsToDefaultVm();
+        const restarted = applied && body.restart === true;
+        if (restarted) await restartDefaultVmForMedia();
+        const warnings = [];
+        if (!applied && mediaSettings.mic.mode === 'file' && process.platform === 'win32') {
+          warnings.push('file-loop microphone input is only available on Linux/remote PulseAudio hosts; use host passthrough or an OBS/VB-Audio device on Windows');
+        }
+        if (applied && mediaSettings.mic.mode === 'file' && process.platform === 'win32') {
+          warnings.push('file-loop microphone input is only available on Linux/remote PulseAudio hosts; use host passthrough or an OBS/VB-Audio device on Windows');
+        }
+        sendJson(res, 200, { ...mediaStateBody(), saved: true, applied, restarted, warnings });
+      } catch (error) {
+        sendError(res, 400, error && error.message ? error.message : String(error));
+      }
+    });
+
+    // ---------------------------------------------------------------------
+    // Remote VM hosts over SSH.
+    //
+    // Every session is one SSH tunnel to a remote emulator's adb port plus one
+    // remote instance registered in the same list as local extras. With
+    // `launch` the fixed headless emulator command starts over SSH first; the
+    // virtual camera posters and the virtual microphone payload travel with it.
+    // Profiles are stored in <profile>/.apk-vm/remote-profiles.json (no keys).
+    // ---------------------------------------------------------------------
     register('/apk-vm/remote', async (req, res) => {
       if (req.method === 'GET') {
-        sendJson(res, 200, { ok: true, tunnel: remoteTunnel ? remoteTunnel.status() : null });
+        sendJson(res, 200, await remoteState());
         return;
       }
       if (req.method !== 'POST') {
@@ -3084,50 +3417,185 @@ export function apply(ctx, config = {}) {
       const body = await readJsonBody(req);
       const action = String(body.action || 'connect').toLowerCase();
       try {
-        if (action === 'disconnect') {
-          if (remoteTunnel) {
-            await remoteTunnel.stop();
-            remoteTunnel = null;
+        if (action === 'status') {
+          sendJson(res, 200, await remoteState());
+          return;
+        }
+        if (action === 'save-profile') {
+          const saved = await remoteManager.saveProfile(
+            body.profile && typeof body.profile === 'object' ? body.profile : body,
+            { id: body.id, name: body.name },
+          );
+          sendJson(res, 200, { ...(await remoteState()), saved: true, profileFile: saved.file });
+          return;
+        }
+        if (action === 'forget-profile') {
+          let removed = [];
+          if (body.id) {
+            const out = await remoteManager.forgetProfile(String(body.id));
+            removed = out.removed || [];
+          } else {
+            const listed = await remoteManager.listProfiles().catch(() => ({ profiles: [] }));
+            const profiles = Array.isArray(listed && listed.profiles) ? listed.profiles : [];
+            for (const profile of profiles) {
+              const out = await remoteManager.forgetProfile(String(profile.id));
+              removed = removed.concat(out.removed || []);
+            }
           }
-          await stopScrcpy();
-          await vm.detachDevice();
+          sendJson(res, 200, { ...(await remoteState()), saved: false, removed });
+          return;
+        }
+        if (action === 'disconnect' || action === 'remove-session') {
+          const sessions = await remoteManager.list();
+          const ids = body.id ? [String(body.id)] : (sessions || []).map((session) => session.id);
+          const removed = [];
+          for (const sessionId of ids) {
+            removed.push(action === 'remove-session'
+              ? await remoteManager.removeSession(sessionId, { killRemote: body.stopEmulator === true })
+              : await remoteManager.disconnectSession(sessionId, { killRemote: body.stopEmulator === true, remove: body.remove === true }));
+            if (remoteMicSessions.has(sessionId)) {
+              remoteMicSessions.delete(sessionId);
+              const session = remoteManager.getSession(sessionId);
+              if (session && session.profile) {
+                await runSshCommand(session.profile, buildRemoteMicStopCommand(), { timeoutMs: 15000 }).catch(() => {});
+              }
+            }
+          }
+          if (body.detachDevice !== false) await vm.detachDevice().catch(() => {});
           frame.buffer = null;
           frame.at = 0;
-          sendJson(res, 200, { ok: true, detached: true, tunnel: null, vm: await vm.status() });
+          sendJson(res, 200, { ...(await remoteState()), detached: true, removed });
           return;
         }
         if (action !== 'connect') throw new Error(`unsupported remote action: ${action}`);
-        if (remoteTunnel) {
-          await remoteTunnel.stop();
-          remoteTunnel = null;
+
+        const profileInput = body.profile && typeof body.profile === 'object'
+          ? body.profile
+          : (body.profileId ? String(body.profileId) : body);
+        let launchConfig = mediaSettings;
+        const mediaNotes = [];
+        let micPrepared = false;
+        let launchPlan = { extraEmulatorArgs: [], enableAudio: false, warnings: [] };
+        const launchRequested = body.launch === true;
+        if (launchRequested) {
+          let profileForUpload = null;
+          try {
+            const wanted = profileInput && typeof profileInput === 'object' && profileInput.host
+              ? profileInput
+              : (typeof profileInput === 'string' ? { id: profileInput } : profileInput);
+            if (wanted && typeof wanted === 'object' && wanted.host) {
+              profileForUpload = normalizeRemoteProfile(wanted);
+            } else {
+              const wantedId = typeof profileInput === 'string' ? profileInput : (body.profileId || null);
+              if (wantedId) {
+                const found = await remoteManager.getProfile(String(wantedId));
+                if (found && found.ok && found.profile) profileForUpload = normalizeRemoteProfile(found.profile);
+              }
+            }
+          } catch (error) {
+            throw new Error(`remote profile is not usable: ${error.message}`);
+          }
+          if (profileForUpload) {
+            const posters = Array.isArray(mediaSettings.camera && mediaSettings.camera.posters)
+              ? mediaSettings.camera.posters
+              : [];
+            const remotePosters = [];
+            for (const poster of posters.slice(0, 8)) {
+              if (!poster || !poster.path) continue;
+              try {
+                const name = poster.name || 'poster';
+                const rawExtension = (path.extname(poster.path).slice(1) || 'png').toLowerCase();
+                const extension = rawExtension === 'jpg' || rawExtension === 'jpeg' ? rawExtension : 'png';
+                const remotePath = remotePosterPath(dataRoot, name, extension);
+                await uploadToRemote(profileForUpload, poster.path, remotePath);
+                remotePosters.push({ name, path: remotePath });
+                mediaNotes.push(`uploaded camera poster ${name}`);
+              } catch (error) {
+                launchPlan.warnings.push(`camera poster upload failed: ${error.message}`);
+              }
+            }
+            if (remotePosters.length) {
+              launchConfig = { ...mediaSettings, camera: { ...mediaSettings.camera, posters: remotePosters } };
+            }
+            const mic = mediaSettings.mic || { mode: 'off' };
+            if (mic.mode === 'file' && mic.filePath) {
+              try {
+                const remoteAudio = remoteAudioPath(dataRoot, path.basename(mic.filePath));
+                await uploadToRemote(profileForUpload, mic.filePath, remoteAudio);
+                const started = await runSshCommand(profileForUpload, buildRemoteMicStartCommand(remoteAudio), { timeoutMs: 30000 });
+                if (!started.ok) throw new Error((started.stderr || started.error || 'ssh command failed').slice(0, 300));
+                micPrepared = true;
+                mediaNotes.push(`started virtual microphone ${micSourceName(dataRoot)}`);
+              } catch (error) {
+                launchPlan.warnings.push(`virtual microphone setup failed: ${error.message}`);
+              }
+            }
+          }
+          launchPlan = { ...remoteLaunchMedia(launchConfig), warnings: launchPlan.warnings.concat(remoteLaunchMedia(launchConfig).warnings) };
         }
-        const tunnel = new SshAdbTunnel({
-          host: body.host,
-          user: body.user,
-          port: body.sshPort,
-          keyPath: body.keyPath,
-          remotePort: body.remotePort,
-          localPort: body.localPort,
-          sshPath: body.sshPath,
+        const created = await remoteManager.createSession({
+          profile: profileInput,
+          options: {
+            launch: launchRequested,
+            avdName: body.avdName || undefined,
+            consolePort: body.consolePort || undefined,
+            remotePort: body.remotePort || undefined,
+            localPort: body.localPort || undefined,
+            extraEmulatorArgs: launchPlan.extraEmulatorArgs,
+            enableAudio: launchPlan.enableAudio,
+            attachInBackground: body.attachInBackground !== false,
+            connectTimeoutMs: body.connectTimeoutMs || undefined,
+          },
         });
-        const started = await tunnel.start().catch(async (error) => {
-          await tunnel.stop();
-          throw error;
-        });
-        remoteTunnel = tunnel;
-        try {
-          await stopScrcpy();
-          await vm.attachDevice(started.serial);
-        } catch (error) {
-          await tunnel.stop();
-          remoteTunnel = null;
-          throw error;
+        if (body.saveProfile !== false) {
+          try {
+            await remoteManager.saveProfile(profileInput);
+          } catch (error) {
+            launchPlan.warnings.push(`could not save the remote profile: ${error.message}`);
+          }
         }
+        if (micPrepared) remoteMicSessions.add(created.id);
         frame.buffer = null;
         frame.at = 0;
-        sendJson(res, 200, { ok: true, tunnel: tunnel.status(), vm: await vm.status() });
+        sendJson(res, 202, { ...(await remoteState()), session: created, media: mediaNotes, warnings: launchPlan.warnings });
+        return;
       } catch (error) {
-        sendError(res, 400, error.message);
+        sendError(res, 400, error && error.message ? error.message : String(error));
+      }
+    });
+
+    // ---------------------------------------------------------------------
+    // Emulator inventory: every AVD/device this plugin can drive — local
+    // AVDs + android devices + saved remote hosts — merged into one list.
+    // ---------------------------------------------------------------------
+    register('/apk-vm/emulators', async (req, res) => {
+      if (req.method !== 'GET') {
+        sendError(res, 405, 'GET only');
+        return;
+      }
+      try {
+        const running = (instanceManager ? instanceManager.list() : []).map((instance) => ({
+          id: instance.id,
+          avdName: instance.avdName,
+          serial: instance.serial,
+          kind: instance.kind || 'extra',
+          state: instance.state,
+        }));
+        const local = await collectLocalInventory({
+          emulatorPath: vm.emulatorPath || cfg.emulatorPath || undefined,
+          adbPath: vm.adbPath || undefined,
+          sdkRoot: vm.sdkRoot || cfg.sdkRoot || undefined,
+          runningInstances: running,
+        });
+        const listed = await remoteManager.listProfiles().catch(() => ({ profiles: [] }));
+        const profiles = Array.isArray(listed && listed.profiles) ? listed.profiles : [];
+        const remotes = [];
+        for (const profile of profiles) {
+          remotes.push(await collectRemoteInventory({ profile }));
+        }
+        sendJson(res, 200, buildEmulatorInventory({ local, remotes }));
+      } catch (error) {
+        sendError(res, 500, error && error.message ? error.message : String(error));
       }
     });
 
@@ -3903,6 +4371,7 @@ export function apply(ctx, config = {}) {
       for (const id of [...extraRouteDisposers.keys()]) disposeExtraRouteSet(id);
       for (const bridge of cdpBridges.values()) void bridge.close().catch(() => {});
       cdpBridges.clear();
+      void remoteManager.dispose().catch(() => {});
       void instanceManager?.dispose?.();
       for (const dispose of disposers.reverse()) {
         try {
@@ -3918,14 +4387,6 @@ export function apply(ctx, config = {}) {
   ctx.inject(['webServer'], (host) => {
     host.effect(() => mountRoutes(host.webServer), 'dsh-apk-vm: http routes');
   });
-
-  ctx.effect(() => {
-    return () => {
-      const tunnel = remoteTunnel;
-      remoteTunnel = null;
-      if (tunnel) void tunnel.stop().catch(() => {});
-    };
-  }, 'dsh-apk-vm: ssh tunnel');
 
   // Optional warm start: boot the VM right after the plugin activates so the
   // first panel/tab open lands on a running (or nearly booted) device. This is
