@@ -94,6 +94,7 @@
     "docs/PRIVACY.md",
     "docs/SUBMISSION.md",
     "docs/LINUX-E2E.md",
+    "docs/AGENTS.md",
     "docs/*.png",
     "docs/*.gif",
     "scripts/privacy-scan.mjs",

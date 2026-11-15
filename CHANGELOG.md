@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### Added
+
+- **Agent playbook.** [`docs/AGENTS.md`](docs/AGENTS.md) ships with the package and is readable
+  at runtime with `apk_vm` action `guide` (or `GET /apk-vm/guide`); the tool description,
+  README and docs link to it. The guide covers the standard loop, the action map,
+  device-pixel vs CSS-coordinate rules, WebView/CDP usage, instances and remote sessions,
+  error recovery and safety boundaries.
+
 ### Changed
 
 - **DSH compatibility metadata.** `package.json` now declares `engines.dsh`

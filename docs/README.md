@@ -18,6 +18,13 @@ Gaussian blur:
   through the HTTP API → 60 fps animation in the guest. Reproducible from the guest-side
   screencap loop in [`../DEMO.md`](../DEMO.md); `scripts/make-demo-gif.mjs` re-encodes it.
 
+## Agent playbook
+
+- `AGENTS.md` — the agent-facing playbook for the `apk_vm` tool: standard loop, action map,
+  device-pixel vs CSS-coordinate rules, WebView/CDP usage, instances and remote sessions, error
+  recovery and safety boundaries. Readable at runtime with `apk_vm` action `guide` or
+  `GET /apk-vm/guide`; the tool description points agents at it.
+
 The assets are not fabricated. Before adding a new screenshot, crop out or mask the DSH sidebar
 conversation names, local paths and any LAN IPs (Gaussian blur is enough; the raw panel already
 hides credentials and APK file paths are blur-friendly demo data).

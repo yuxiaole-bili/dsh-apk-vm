@@ -133,7 +133,13 @@ async function callRoute(route, options) {
   const res = makeRes();
   await handler(makeReq(options), res);
   assert.ok(res.ended, `route ${route} sent a response`);
-  return { status: res.statusCode, json: JSON.parse(res.body || 'null') };
+  let json = null;
+  try {
+    json = JSON.parse(res.body || 'null');
+  } catch {
+    /* non-JSON responses (Markdown/PNG routes) keep the raw body only */
+  }
+  return { status: res.statusCode, headers: res.headers, body: res.body, json };
 }
 
 const assertJsonSafe = (value, label) => {
@@ -162,6 +168,28 @@ apply(hostCtx, {
 assert.ok(tool && typeof tool.execute === 'function', 'apk_vm tool is registered');
 assert.ok(typeof tool.executeInner === 'function', 'apk_vm tool exposes executeInner');
 assert.ok(routes.has('/apk-vm/storage'), 'storage route is registered');
+assert.ok(routes.has('/apk-vm/guide'), 'agent guide route is registered');
+
+// ---------------------------------------------------------------------------
+// Agent playbook: `guide` action + GET /apk-vm/guide serve docs/AGENTS.md
+// without touching the VM (works even when the environment is missing).
+// ---------------------------------------------------------------------------
+
+const guideTool = await tool.execute({ action: 'guide' }, {});
+assertJsonSafe(guideTool, 'guide tool result');
+assert.equal(guideTool.ok, true, 'guide action reports ok:true');
+assert.equal(guideTool.result.path, 'docs/AGENTS.md', 'guide result reports the packaged path');
+// DSH shows the tool summary to the model, so the playbook must be the summary.
+assert.match(guideTool.summary, /^# Agent guide/m, 'guide summary carries the AGENTS.md heading');
+assert.match(guideTool.summary, /apk_vm/, 'guide summary mentions the apk_vm tool');
+assert.equal(guideTool.result.chars, guideTool.summary.length, 'guide reports the summary length');
+assert.ok(guideTool.result.bytes > 1000, 'guide reports a non-trivial byte size');
+console.log(`PASS guide action: ${guideTool.result.chars} chars delivered via summary`);
+
+const guideRoute = await callRoute('/apk-vm/guide', { method: 'GET', url: '/apk-vm/guide' });
+assert.equal(guideRoute.status, 200, 'GET /apk-vm/guide responds 200');
+assert.match(String(guideRoute.body || ''), /^# Agent guide/m, 'GET /apk-vm/guide serves Markdown');
+console.log('PASS guide route: GET /apk-vm/guide 200 + Markdown');
 
 // ---------------------------------------------------------------------------
 // Bug 2: storage route + tool action must not throw "storageSdkRoot is not defined"

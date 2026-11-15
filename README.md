@@ -918,6 +918,7 @@ JSON bodies are bounded to 64 KiB; the raw APK upload is bounded to 500 MiB.
 | POST | `/apk-vm/device` | `{"serial":"<adb-serial>"}` attach an online physical/network device; `{"serial":""}` detach and restore the managed AVD. |
 | GET/POST | `/apk-vm/remote` | Multi-session SSH-proxied VMs: `POST {"action":"connect","profile":{host,user,keyPath?,sshPort?,remotePort?,avdName?,launch?},"connectTimeoutMs"?}`, `{"action":"disconnect","id"?,"stopEmulator"?,"detachDevice"?}`, `{"action":"remove-session","id"?}`, `{"action":"status"}`, `{"action":"save-profile"}`, `{"action":"forget-profile","id"?}`; `GET` returns `{sessions,profiles,counts,…}`. |
 | GET | `/apk-vm/emulators` | Merged local + remote emulator inventory (`local`, `remotes[]`, `updatedAt`). |
+| GET | `/apk-vm/guide` | Agent playbook (`docs/AGENTS.md`) as Markdown; same content as `apk_vm` action `guide`. |
 | GET/POST | `/apk-vm/camera` | Virtual camera settings: `POST {"action":"save"|"apply","camera":{back,front,posters[]},"restart"?}`. |
 | GET/POST | `/apk-vm/mic` | Virtual microphone settings: `POST {"action":"save"|"apply","mic":{mode,backend,filePath},"restart"?}`. |
 | POST | `/apk-vm/vm` | `{"action":"start"\|"stop"\|"restart"\|"snapshot"}`. |
@@ -1004,6 +1005,11 @@ device management (`devices`, `attach_device`, `detach_device`),
 plus `start` / `stop` and instance management (`list_instances`, `create_instance`,
 `destroy_instance`). It calls the same Host methods as the HTTP routes and the panel (no
 duplicated logic).
+
+An agent-facing playbook ships in [docs/AGENTS.md](docs/AGENTS.md) and is readable at runtime
+with `{"action":"guide"}` (or `GET /apk-vm/guide`): the standard loop, action map,
+device-pixel vs CSS-coordinate rules, WebView/CDP usage, instance and remote-session handling,
+and error recovery.
 
 For concurrent Agents, pass `instance` to target a specific VM; when omitted, the tool resolves
 the calling Agent's lease and assigned instance (first conversation → default VM, later

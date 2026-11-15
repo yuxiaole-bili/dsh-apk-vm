@@ -62,6 +62,28 @@ export const name = 'dsh-apk-vm';
 const PLUGIN_DIR = path.dirname(fileURLToPath(import.meta.url));
 const SCRCPY_JAR = path.join(PLUGIN_DIR, 'lib', 'vendor', 'scrcpy-server-v5.0.1.jar');
 
+/**
+ * Agent playbook shipped with the package (docs/AGENTS.md). Cached after the
+ * first read; `null` when a local build does not carry the file (the tool then
+ * reports that the guide is not bundled instead of failing).
+ */
+const AGENT_GUIDE_PATH = path.join(PLUGIN_DIR, 'docs', 'AGENTS.md');
+// Single source of truth for the tool action enum (schema + early validation).
+const TOOL_ACTIONS = Object.freeze(["info", "shell", "logcat", "getprop", "setprop", "packages", "install", "push", "pull", "reboot", "root", "force_stop", "clear_data", "uninstall", "rotate", "ui_dump", "inspect_ui", "proxy", "install_ca", "network", "record", "perf", "screenshot", "tap", "swipe", "long_press", "key", "text", "apk_info", "find_ui", "assert_text", "tap_text", "clipboard_get", "clipboard_set", "devices", "attach_device", "detach_device", "start", "stop", "list_instances", "create_instance", "destroy_instance", "owner_status", "claim_vm", "release_vm", "flow_start", "flow_stop", "flow_list", "flow_replay", "storage", "clean_storage", "skill_list", "skill_get", "skill_save", "skill_delete", "skill_start", "skill_stop", "skill_cancel", "skill_run", "skill_codebook", "control_ui", "control_features", "control_codebook", "control_tap", "control_input", "control_long_press", "control_swipe", "control_assert", "control_wait", "control_launch", "webview", "tap_css", "tap_selector", "type_text", "wait_for", "env_snapshot", "env_restore", "adb", "guide"]);
+
+
+let agentGuideCache;
+function readAgentGuide() {
+  if (agentGuideCache === undefined) {
+    try {
+      agentGuideCache = readFileSync(AGENT_GUIDE_PATH, 'utf8');
+    } catch {
+      agentGuideCache = null;
+    }
+  }
+  return agentGuideCache;
+}
+
 /** Body limit for the JSON control endpoints. */
 const BODY_LIMIT_BYTES = 64 * 1024;
 /** Upload limit for browser APK uploads (500 MiB; Android emulator system apps are smaller). */
@@ -3599,6 +3621,30 @@ export function apply(ctx, config = {}) {
       }
     });
 
+    // ---------------------------------------------------------------------
+    // Agent playbook: the same docs/AGENTS.md the tool exposes through
+    // action=guide, so scripts and panels can read it without the tool.
+    // ---------------------------------------------------------------------
+    register('/apk-vm/guide', async (req, res) => {
+      if (req.method !== 'GET' && req.method !== 'HEAD') {
+        sendError(res, 405, 'GET only');
+        return;
+      }
+      const markdown = readAgentGuide();
+      if (markdown === null) {
+        sendError(res, 404, 'agent guide is not bundled with this build (docs/AGENTS.md is missing)');
+        return;
+      }
+      const body = Buffer.from(markdown, 'utf8');
+      res.writeHead(200, {
+        'Content-Type': 'text/markdown; charset=utf-8',
+        'Content-Length': body.length,
+        'Cache-Control': 'no-store',
+      });
+      if (req.method === 'HEAD') res.end();
+      else res.end(body);
+    });
+
     register('/apk-vm/vm', async (req, res) => {
       if (req.method !== 'POST') {
         sendError(res, 405, 'POST only');
@@ -4994,6 +5040,9 @@ export function apply(ctx, config = {}) {
   async function recordToolActivity(args, outcome, startedAt) {
     try {
       const action = String((args && args.action) || '').toLowerCase() || '(missing)';
+      // Reading the playbook is not a VM operation and its summary is the whole
+      // Markdown document; keep the activity journal focused on real actions.
+      if (action === 'guide') return;
       const ok = !(outcome && outcome.ok === false);
       const failure = outcome && outcome.result && outcome.result.error;
       let shot = null;
@@ -5034,14 +5083,15 @@ export function apply(ctx, config = {}) {
       'Use shell for low-level Android commands, logcat for logs, ' +
       'setprop for system properties, packages to list apps, install to install+launch an APK by local path, ' +
       'push/pull to move files (under /data/local/tmp, /sdcard or /storage/emulated/0), reboot to restart the guest, ' +
-      'rotate to lock orientation, ui_dump for the accessibility tree, record for a short MP4, perf for CPU/memory.',
+      'rotate to lock orientation, ui_dump for the accessibility tree, record for a short MP4, perf for CPU/memory. ' +
+      'Call action=guide to read the full agent playbook (docs/AGENTS.md) — it returns the Markdown itself: recommended workflow, coordinates/dpr, WebView and instance usage, and error handling.',
     parameters: {
       type: 'object',
       additionalProperties: false,
       properties: {
         action: {
           type: 'string',
-          description: 'info|shell|logcat|getprop|setprop|packages|install|push|pull|reboot|root|force_stop|clear_data|uninstall|rotate|ui_dump|inspect_ui|proxy|install_ca|network|record|perf|screenshot|tap|swipe|long_press|key|text|apk_info|find_ui|assert_text|tap_text|clipboard_get|clipboard_set|devices|attach_device|detach_device|start|stop|list_instances|create_instance|destroy_instance|owner_status|claim_vm|release_vm|flow_start|flow_stop|flow_list|flow_replay|storage|clean_storage|skill_list|skill_get|skill_save|skill_delete|skill_start|skill_stop|skill_cancel|skill_run|skill_codebook|control_ui|control_features|control_codebook|control_tap|control_input|control_long_press|control_swipe|control_assert|control_wait|control_launch|webview|tap_css|tap_selector|type_text|wait_for|env_snapshot|env_restore|adb',
+          description: TOOL_ACTIONS.join('|'),
         },
         instance: { type: 'string', description: 'Target VM instance id (default or an extra instance from list_instances). Omit for the calling Agent\'s assigned instance.' },
         ownerScope: { type: 'string', enum: ['shared', 'conversation', 'project'], description: 'VM ownership scope: shared (default), conversation (dedicated per DSH session), or project (dedicated per workspace).' },
@@ -5178,6 +5228,32 @@ export function apply(ctx, config = {}) {
 
     async executeInner(args, exec) {
       const action = String((args && args.action) || '').toLowerCase();
+
+      // Reject unknown actions before any device/lease work: a typo must not
+      // inherit a not-ready error or touch another session's VM.
+      if (!TOOL_ACTIONS.includes(action)) {
+        throw new Error(`unsupported apk_vm action: ${action}`);
+      }
+
+      // The playbook is a pure read of a packaged Markdown file: no VM handle
+      // is resolved, so agents can read it even before the environment exists.
+      if (action === 'guide') {
+        const markdown = readAgentGuide();
+        if (markdown === null) {
+          return {
+            ok: false,
+            summary: 'the agent guide is not bundled with this build (docs/AGENTS.md is missing)',
+            result: { path: 'docs/AGENTS.md' },
+          };
+        }
+        return {
+          ok: true,
+          // DSH renders the tool summary as the model-visible text, so the
+          // playbook itself must be the summary; result stays small/JSON-safe.
+          summary: markdown,
+          result: { path: 'docs/AGENTS.md', chars: markdown.length, bytes: Buffer.byteLength(markdown, 'utf8') },
+        };
+      }
 
       // Resolve the VM handle lazily: only actions that actually reach the
       // device should trigger owner assignment/leasing.
@@ -5606,6 +5682,13 @@ export function apply(ctx, config = {}) {
         const snapshot = await api.stop();
         return { ok: true, summary: `stopped ${api.id}`, result: snapshot || {} };
       }
+      // Local push/pull paths are validated before the device readiness gate:
+      // an outside-roots or missing local file must fail with an actionable
+      // error even when the VM is stopped, booting or wedged.
+      let prevalidatedLocalPath;
+      if (action === 'push' || action === 'pull') {
+        prevalidatedLocalPath = resolveDebugLocal(args.path, action === 'push');
+      }
       const status = await ensureToolApiReady(api, action);
       switch (action) {
         case 'info': {
@@ -5797,12 +5880,12 @@ export function apply(ctx, config = {}) {
           return { ok: true, summary: `${api.id}: installed ${installed.packageName} (${installed.label})`, result: installed };
         }
         case 'push': {
-          const localPath = resolveDebugLocal(args.path, true);
+          const localPath = prevalidatedLocalPath || resolveDebugLocal(args.path, true);
           const result = await api.pushFile(localPath, args.remotePath);
           return { ok: true, summary: `pushed ${localPath} -> ${result.remotePath}`, result };
         }
         case 'pull': {
-          const localPath = resolveDebugLocal(args.path, false);
+          const localPath = prevalidatedLocalPath || resolveDebugLocal(args.path, false);
           const result = await api.pullFile(args.remotePath, localPath);
           return { ok: true, summary: `pulled ${args.remotePath} -> ${result.localPath}`, result };
         }
