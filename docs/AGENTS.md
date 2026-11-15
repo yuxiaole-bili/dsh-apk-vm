@@ -72,7 +72,7 @@ or `GET /apk-vm/guide`. The tool description also points here.
   `tap_selector`
 - **Debug:** `shell`, `adb` (raw argv), `logcat`, `getprop`, `setprop`, `root`, `screenshot`
   (`overlay: true` draws UIAutomator boxes), `record`, `perf`, `rotate`
-- **Instances & leases:** `list_instances`, `create_instance`, `destroy_instance`,
+- **Instances & leases:** `list_instances`, `create_instance`, `rename_instance`, `destroy_instance`,
   `owner_status`, `claim_vm`, `release_vm`, `ownerScope` (`shared|conversation|project`),
   `ownerForce`
 - **Network / environment:** `network`, `proxy`, `env_snapshot`, `env_restore`, `install_ca`
@@ -108,6 +108,30 @@ or `GET /apk-vm/guide`. The tool description also points here.
   "script": "(() => ({ w: innerWidth, coarse: matchMedia('(pointer: coarse)').matches }))()" }
 ```
 
+## First call in a new conversation
+
+The first `apk_vm` call in every new conversation returns this playbook once instead of
+executing the requested action (`result.guideRequired: true`). Read it, then repeat the
+call. `action=guide` is always available and never touches a VM.
+
+## Shared vs dedicated VMs
+
+The default instance is a **shared** device: every conversation may use it, it is
+short-lived, and entering it from a different conversation resets the guest to the home
+screen (so you never inherit someone else's foreground app). Use it for one-off inspection
+and short automations.
+
+If this conversation needs a long-lived debugging device — logins, installed apps, stable
+state — claim a dedicated VM instead of holding the shared one:
+
+- `{"action":"claim_vm","instance":"default","ownerScope":"conversation"}` (or `"project"`)
+  reserves the default VM for this conversation/workspace, or
+- `{"action":"create_instance","name":"my-debug","start":true}` starts an isolated extra VM,
+- `owner_status` inspects leases; `release_vm` gives a VM back.
+
+Don't keep several agents on one shared VM. Leases are visible in the panel, and a VM owned
+by another conversation returns `vm-busy` unless you force a takeover (`ownerForce=true`).
+
 ## Instances and remote VMs
 
 - `list_instances` lists `default`, extra instances and remote sessions. Remote sessions appear
@@ -117,6 +141,17 @@ or `GET /apk-vm/guide`. The tool description also points here.
   screenshots, UI dumps and the H.264 stream all work the same way.
 - Each instance has its own WebSocket (`/apk-vm/instances/<id>/ws`), unless the panel falls back
   to PNG frames.
+
+## VM names and per-conversation selection
+
+- Every VM can have a human-friendly display name; ids stay stable (`default`, `frontend`,
+  `remote-…`). `list_instances` entries include `name`.
+- Rename from an agent: `{"action":"rename_instance","instance":"default","name":"QA phone"}`.
+  `create_instance`'s `name` doubles as the initial display name when it is a valid id. From
+  the panel, use Rename in the Instances card. Names persist in
+  `<profile>/.apk-vm/instance-names.json`.
+- The panel follows the current conversation: it auto-selects the VM whose lease belongs to
+  the active session (falling back to `default`); a manual selection sticks for that session.
 
 ## Errors and recovery
 

@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.12.3
 
 ### Added
 
@@ -9,6 +9,23 @@
   README and docs link to it. The guide covers the standard loop, the action map,
   device-pixel vs CSS-coordinate rules, WebView/CDP usage, instances and remote sessions,
   error recovery and safety boundaries.
+
+- **Forced onboarding for new conversations.** The first `apk_vm` call in a new conversation
+  now returns `docs/AGENTS.md` once (`result.guideRequired: true`) and executes nothing; repeat
+  the call after reading it. `action=guide` stays available at any time.
+- **Shared vs dedicated VM guidance.** The guide and README explain that the default instance is
+  a shared, short-lived device, recommend claiming a dedicated VM for long-lived debugging, and
+  note that entering the shared VM from another conversation resets the guest to its home screen
+  (`input keyevent KEYCODE_HOME` + keyguard dismissal).
+- **Quick-boot snapshot self-healing.** A snapshot that crashes the emulator on restore (Windows
+  access violation `0xC0000005`) or that looks partially written (`snapshot.pb` much newer than
+  `ram.bin`) is quarantined automatically, retried once as a cold boot, and rebuilt; the
+  quarantine path is exposed as `status().snapshotRecovery`.
+- **Named VMs and per-conversation auto-selection.** Every instance (including `default` and
+  remote sessions) can carry a persisted display name (`<profile>/.apk-vm/instance-names.json`);
+  rename with `apk_vm` action `rename_instance`, `POST /apk-vm/instances {"action":"rename",…}`
+  or the panel Rename button. The panel follows the current conversation and selects the VM
+  whose lease belongs to the active session instead of always showing the shared default.
 
 ### Changed
 

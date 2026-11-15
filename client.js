@@ -30,7 +30,7 @@ window.__ModuleLoader__.load({
     var SWIPE_THRESHOLD_PX = 24;
     var FRAME_INTERVAL_MS = 500;
     var STATE_INTERVAL_MS = 2000;
-    var CLIENT_VERSION = '0.12.2';
+    var CLIENT_VERSION = '0.12.3';
 
     /* ------------------------------------------------------------------ *
      * Optional dsh-better-sidebar integration.
@@ -392,6 +392,9 @@ window.__ModuleLoader__.load({
       'instances.created': 'Created instance {id}',
       'instances.destroyed': 'Destroyed instance {id}',
       'instances.manage': 'VM instances',
+      'instances.rename': 'Rename',
+      'instances.renamePrompt': 'Display name for this VM',
+      'instances.renamed': 'Renamed VM to {name}',
       'grid.title': 'Grid view',
       'grid.empty': 'No running instances to show.',
       'grid.close': 'Close grid',
@@ -795,6 +798,9 @@ window.__ModuleLoader__.load({
       'instances.created': '已创建实例 {id}',
       'instances.destroyed': '已销毁实例 {id}',
       'instances.manage': '虚拟机实例',
+      'instances.rename': '重命名',
+      'instances.renamePrompt': '为这台虚拟机设置显示名称',
+      'instances.renamed': '已重命名为 {name}',
       'grid.title': '网格视图',
       'grid.empty': '没有正在运行的实例。',
       'grid.close': '关闭网格',
@@ -2184,6 +2190,24 @@ window.__ModuleLoader__.load({
         var tabVisible = propsSafe.visible === undefined ? true : propsSafe.visible !== false;
         var wideDashboard = useWideDashboard() && !embedded;
 
+        /* `main` slot pages do not receive a Session binding, but root-scoped
+           pages do get the `useSessions` hook: use it to follow the current
+           conversation and auto-select the VM that conversation owns. */
+        var useSessions = typeof propsSafe.useSessions === 'function' ? propsSafe.useSessions : null;
+        var currentSessionId = useSessions
+          ? useSessions(function (state) {
+              var byId = state && isObject(state.byId) ? state.byId : {};
+              var ids = Object.keys(byId);
+              for (var i = 0; i < ids.length; i += 1) {
+                var session = byId[ids[i]];
+                if (session && isObject(session.retainedBy) && Number(session.retainedBy.mainView) > 0) {
+                  return session.id || ids[i];
+                }
+              }
+              return null;
+            })
+          : null;
+
         /* ---- state ---------------------------------------------------- */
         var snapshotState = React.useState(null);
         var snapshot = snapshotState[0];
@@ -2523,6 +2547,8 @@ window.__ModuleLoader__.load({
         var activeInstance = activeInstanceState[0];
         var setActiveInstance = activeInstanceState[1];
         var activeInstanceRef = React.useRef('default');
+        var userPickedInstanceRef = React.useRef(false);
+        var lastAutoSessionRef = React.useRef(null);
         var instancesListState = React.useState([]);
         var instancesList = instancesListState[0];
         var setInstancesList = instancesListState[1];
@@ -2904,6 +2930,28 @@ window.__ModuleLoader__.load({
             }
           };
         }, []);
+
+        // Follow the conversation: select the VM owned by the current session
+        // (once per session, unless the user picked a VM manually).
+        React.useEffect(function () {
+          if (!currentSessionId) return;
+          if (lastAutoSessionRef.current !== currentSessionId) {
+            lastAutoSessionRef.current = currentSessionId;
+            userPickedInstanceRef.current = false;
+          }
+          if (userPickedInstanceRef.current) return;
+          var list = Array.isArray(instancesList) ? instancesList : [];
+          var match = null;
+          for (var i = 0; i < list.length; i += 1) {
+            var entry = list[i];
+            var info = entry && isObject(entry.ownerInfo) ? entry.ownerInfo : null;
+            if (info && info.sessionId && String(info.sessionId) === String(currentSessionId)) {
+              match = entry;
+              break;
+            }
+          }
+          if (match && match.id && match.id !== activeInstanceRef.current) setActiveInstanceId(match.id);
+        }, [currentSessionId, instancesList]);
 
         // Load network details once the VM becomes ready (the first render often
         // happens while the state is still loading).
@@ -3501,6 +3549,33 @@ window.__ModuleLoader__.load({
             pushToast('success', T('instances.stopped', { id: id }));
             loadInstances();
             loadState();
+          });
+        }
+
+        function renameInstanceById(id) {
+          if (!id || instanceBusy) return;
+          var entry = null;
+          for (var i = 0; i < instancesList.length; i += 1) {
+            if (instancesList[i].id === id) entry = instancesList[i];
+          }
+          var current = entry && entry.name ? entry.name : id;
+          var next = window.prompt(T('instances.renamePrompt'), current);
+          if (next === null) return;
+          var clean = String(next).trim();
+          if (!clean || clean === current) return;
+          setInstanceBusy(true);
+          requestJson('/apk-vm/instances', {
+            method: 'POST',
+            body: JSON.stringify({ action: 'rename', instance: id, name: clean }),
+          }, T).then(function (result) {
+            if (!mountedRef.current) return;
+            setInstanceBusy(false);
+            if (!result.ok) {
+              pushToast('error', (result.error || T('err.action')).slice(0, 400));
+              return;
+            }
+            pushToast('success', T('instances.renamed', { name: clean }));
+            loadInstances();
           });
         }
 
@@ -5892,7 +5967,7 @@ window.__ModuleLoader__.load({
                     h(
                       'div',
                       { className: 'apkvm-instname', title: entry.id },
-                      isDefault ? T('instances.default') : entry.id,
+                      isDefault ? (entry.name ? entry.name + ' (' + T('instances.default') + ')' : T('instances.default')) : entry.name || entry.id,
                       h('span', { className: 'apkvm-dim' }, ' · ' + (entry.state || '?') + (owner ? ' · ' + owner + ownerScope : ''))
                     ),
                     h(
@@ -5900,12 +5975,25 @@ window.__ModuleLoader__.load({
                       { className: 'apkvm-instmeta' },
                       idle !== null && !isDefault ? T('instances.idle', { seconds: idle }) : ''
                     ),
-                    isDefault
-                      ? null
-                      : h(
-                          'div',
-                          { className: 'apkvm-instactions' },
-                          h(
+                    h(
+                      'div',
+                      { className: 'apkvm-instactions' },
+                      h(
+                        'button',
+                        {
+                          type: 'button',
+                          className: 'apkvm-mini',
+                          title: T('instances.rename'),
+                          onClick: function (event) {
+                            event.preventDefault();
+                            renameInstanceById(entry.id);
+                          },
+                        },
+                        T('instances.rename')
+                      ),
+                      isDefault
+                        ? null
+                        : h(
                             'button',
                             {
                               type: 'button',
@@ -5918,7 +6006,9 @@ window.__ModuleLoader__.load({
                             },
                             T('instances.stop')
                           ),
-                          h(
+                      isDefault
+                        ? null
+                        : h(
                             'button',
                             {
                               type: 'button',
@@ -5931,7 +6021,7 @@ window.__ModuleLoader__.load({
                             },
                             T('instances.delete')
                           )
-                        )
+                    )
                   );
                 })
               )
@@ -7527,11 +7617,14 @@ window.__ModuleLoader__.load({
             'aria-label': T('instances.label'),
             disabled: instanceBusy,
             onChange: function (event) {
+              userPickedInstanceRef.current = true;
               setActiveInstanceId(event && event.target ? String(event.target.value) : 'default');
             },
           },
           instanceOptions.map(function (entry) {
-            var label = entry.id === 'default' ? T('instances.default') : entry.id;
+            var label = entry.id === 'default'
+              ? entry.name ? entry.name + ' (' + T('instances.default') + ')' : T('instances.default')
+              : entry.name || entry.id;
             var owner = entry.owner ? String(entry.owner).replace(/^agent-/, '').slice(0, 10) : '';
             return h(
               'option',

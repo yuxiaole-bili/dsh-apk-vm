@@ -192,6 +192,26 @@ assert.match(String(guideRoute.body || ''), /^# Agent guide/m, 'GET /apk-vm/guid
 console.log('PASS guide route: GET /apk-vm/guide 200 + Markdown');
 
 // ---------------------------------------------------------------------------
+// Forced onboarding: the first apk_vm call in a new conversation returns the
+// playbook once; the retry executes, and reading the guide marks it onboarded.
+// ---------------------------------------------------------------------------
+// Use a fresh session id per run: the onboarding state is persisted under the
+// plugin data directory, so a fixed id would be "already onboarded" on a re-run.
+const onboardingRun = `${process.pid}-${Date.now()}`;
+const onboardingExec = { agent: { session: { header: { id: `tool-core-onboarding-${onboardingRun}-1` } } } };
+const onboardingFirst = await tool.execute({ action: 'list_instances' }, onboardingExec);
+assertJsonSafe(onboardingFirst, 'forced onboarding result');
+assert.equal(onboardingFirst.result.guideRequired, true, 'first call in a new conversation is gated');
+assert.match(onboardingFirst.summary, /One-time onboarding/, 'gate explains the retry');
+const onboardingRetry = await tool.execute({ action: 'list_instances' }, onboardingExec);
+assert.notEqual(onboardingRetry.result && onboardingRetry.result.guideRequired, true, 'retry executes the action');
+const onboardingGuideFirst = await tool.execute({ action: 'guide' }, { agent: { session: { header: { id: `tool-core-onboarding-${onboardingRun}-2` } } } });
+assert.equal(onboardingGuideFirst.ok, true, 'guide call works in a fresh conversation');
+const afterGuide = await tool.execute({ action: 'list_instances' }, { agent: { session: { header: { id: `tool-core-onboarding-${onboardingRun}-2` } } } });
+assert.notEqual(afterGuide.result && afterGuide.result.guideRequired, true, 'reading guide marks the conversation onboarded');
+console.log('PASS forced onboarding: gated once per conversation, retry executes');
+
+// ---------------------------------------------------------------------------
 // Bug 2: storage route + tool action must not throw "storageSdkRoot is not defined"
 // ---------------------------------------------------------------------------
 

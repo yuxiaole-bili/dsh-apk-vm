@@ -24,6 +24,7 @@ import { fileURLToPath } from 'node:url';
 
 import { AndroidVm } from './lib/android.js';
 import { InstanceManager } from './lib/instances.js';
+import { defaultInstanceNamesPath } from './lib/instance-names.js';
 import { OWNER_SCOPE, normalizeScope } from './lib/vm-ownership.js';
 import { checkOwnerAccess, ownerFromHttp } from './lib/http-owner.js';
 import { ScrcpySession, annexbToAvcc, CONTROL_MESSAGE_TYPE } from './lib/scrcpy.js';
@@ -69,7 +70,7 @@ const SCRCPY_JAR = path.join(PLUGIN_DIR, 'lib', 'vendor', 'scrcpy-server-v5.0.1.
  */
 const AGENT_GUIDE_PATH = path.join(PLUGIN_DIR, 'docs', 'AGENTS.md');
 // Single source of truth for the tool action enum (schema + early validation).
-const TOOL_ACTIONS = Object.freeze(["info", "shell", "logcat", "getprop", "setprop", "packages", "install", "push", "pull", "reboot", "root", "force_stop", "clear_data", "uninstall", "rotate", "ui_dump", "inspect_ui", "proxy", "install_ca", "network", "record", "perf", "screenshot", "tap", "swipe", "long_press", "key", "text", "apk_info", "find_ui", "assert_text", "tap_text", "clipboard_get", "clipboard_set", "devices", "attach_device", "detach_device", "start", "stop", "list_instances", "create_instance", "destroy_instance", "owner_status", "claim_vm", "release_vm", "flow_start", "flow_stop", "flow_list", "flow_replay", "storage", "clean_storage", "skill_list", "skill_get", "skill_save", "skill_delete", "skill_start", "skill_stop", "skill_cancel", "skill_run", "skill_codebook", "control_ui", "control_features", "control_codebook", "control_tap", "control_input", "control_long_press", "control_swipe", "control_assert", "control_wait", "control_launch", "webview", "tap_css", "tap_selector", "type_text", "wait_for", "env_snapshot", "env_restore", "adb", "guide"]);
+const TOOL_ACTIONS = Object.freeze(["info", "shell", "logcat", "getprop", "setprop", "packages", "install", "push", "pull", "reboot", "root", "force_stop", "clear_data", "uninstall", "rotate", "ui_dump", "inspect_ui", "proxy", "install_ca", "network", "record", "perf", "screenshot", "tap", "swipe", "long_press", "key", "text", "apk_info", "find_ui", "assert_text", "tap_text", "clipboard_get", "clipboard_set", "devices", "attach_device", "detach_device", "start", "stop", "list_instances", "create_instance", "rename_instance", "destroy_instance", "owner_status", "claim_vm", "release_vm", "flow_start", "flow_stop", "flow_list", "flow_replay", "storage", "clean_storage", "skill_list", "skill_get", "skill_save", "skill_delete", "skill_start", "skill_stop", "skill_cancel", "skill_run", "skill_codebook", "control_ui", "control_features", "control_codebook", "control_tap", "control_input", "control_long_press", "control_swipe", "control_assert", "control_wait", "control_launch", "webview", "tap_css", "tap_selector", "type_text", "wait_for", "env_snapshot", "env_restore", "adb", "guide"]);
 
 
 let agentGuideCache;
@@ -362,6 +363,7 @@ export function apply(ctx, config = {}) {
           emulatorPath: vm.emulatorPath,
           systemImage: cfg.systemImage || DEFAULT_SYSTEM_IMAGE,
           baseAvdName: cfg.avdName || 'dsh_apk',
+          namesFile: defaultInstanceNamesPath(dataRoot),
           maxInstances: cfg.maxInstances || 3,
           gpuMode: cfg.gpuMode || 'host',
           snapshotName: cfg.snapshotName || 'default_boot',
@@ -951,6 +953,114 @@ export function apply(ctx, config = {}) {
   // Sessions that received a file-loop virtual microphone; disconnect stops it.
   const remoteMicSessions = new Set();
 
+  // One-time onboarding: the first apk_vm call in each conversation returns the
+  // playbook instead of touching a device. Persisted next to the other runtime
+  // state so a host restart does not re-teach the same conversation, but capped
+  // and pruned so the file cannot grow without bound.
+  const GUIDE_SEEN_VERSION = 1;
+  const GUIDE_SEEN_MAX_SESSIONS = 200;
+  const GUIDE_SEEN_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+  const guideSeenFile = path.join(dataRoot, '.apk-vm', 'guide-seen.json');
+  const guideSeenSessions = new Map();
+  let guideSeenLoaded = false;
+  function loadGuideSeenSessions() {
+    if (guideSeenLoaded) return;
+    guideSeenLoaded = true;
+    try {
+      const parsed = JSON.parse(readFileSync(guideSeenFile, 'utf8'));
+      const sessions = parsed && typeof parsed.sessions === 'object' && parsed.sessions ? parsed.sessions : {};
+      const cutoff = Date.now() - GUIDE_SEEN_TTL_MS;
+      for (const [id, at] of Object.entries(sessions)) {
+        if (typeof at === 'number' && at >= cutoff) guideSeenSessions.set(String(id), at);
+      }
+    } catch {
+      /* missing/invalid file: every conversation starts un-onboarded */
+    }
+  }
+  function persistGuideSeenSessions() {
+    loadGuideSeenSessions();
+    const sessions = {};
+    for (const [id, at] of guideSeenSessions) sessions[id] = at;
+    const payload = { version: GUIDE_SEEN_VERSION, updatedAt: new Date().toISOString(), sessions };
+    void (async () => {
+      try {
+        await fsp.mkdir(path.dirname(guideSeenFile), { recursive: true });
+        const tmp = `${guideSeenFile}.${process.pid}.${Date.now()}.tmp`;
+        await fsp.writeFile(tmp, `${JSON.stringify(payload, null, 2)}\n`, 'utf8');
+        await fsp.rename(tmp, guideSeenFile);
+      } catch {
+        /* best effort: onboarding must never fail a tool call */
+      }
+    })();
+  }
+  function guideSessionSeen(sessionId) {
+    loadGuideSeenSessions();
+    const at = guideSeenSessions.get(String(sessionId));
+    if (at === undefined) return false;
+    if (Date.now() - at > GUIDE_SEEN_TTL_MS) {
+      guideSeenSessions.delete(String(sessionId));
+      return false;
+    }
+    return true;
+  }
+  function markGuideSessionSeen(sessionId) {
+    loadGuideSeenSessions();
+    const id = String(sessionId);
+    guideSeenSessions.delete(id);
+    guideSeenSessions.set(id, Date.now());
+    while (guideSeenSessions.size > GUIDE_SEEN_MAX_SESSIONS) {
+      const oldest = guideSeenSessions.keys().next();
+      if (oldest.done) break;
+      guideSeenSessions.delete(oldest.value);
+    }
+    persistGuideSeenSessions();
+  }
+
+  // A shared VM is a common device: when a different conversation starts using
+  // the default instance again, reset the guest to its launcher so a new Agent
+  // never inherits someone else's foreground app. Readiness is awaited in the
+  // background so the tool response stays fast.
+  async function waitForReadyApi(api, timeoutMs = 120000) {
+    const deadline = Date.now() + Math.max(5000, Number(timeoutMs) || 0);
+    let last = null;
+    while (Date.now() < deadline) {
+      try {
+        last = await api.status();
+      } catch {
+        last = null;
+      }
+      if (last && last.state === 'ready' && last.serial) return last;
+      if (last && last.state === 'error' && last.error) return last;
+      await new Promise((resolve) => {
+        const timer = setTimeout(resolve, 1000);
+        if (timer && typeof timer.unref === 'function') timer.unref();
+      });
+    }
+    return last;
+  }
+
+  async function restoreSharedDesktop(api, owner, previousOwner) {
+    try {
+      if (!owner || owner.scope !== 'shared' || !owner.sessionId) return;
+      if (previousOwner && previousOwner.sessionId === owner.sessionId) return;
+      const status = await waitForReadyApi(api, 120000);
+      if (!status || status.state !== 'ready' || !status.serial) return;
+      await api.adb(['-s', status.serial, 'shell', 'input', 'keyevent', 'KEYCODE_HOME'], {
+        timeoutMs: 15000,
+        maxBytes: 16 * 1024,
+      });
+      await api.adb(['-s', status.serial, 'shell', 'wm', 'dismiss-keyguard'], {
+        timeoutMs: 15000,
+        maxBytes: 16 * 1024,
+      }).catch(() => {});
+      if (typeof vm._pushLog === 'function') {
+        vm._pushLog(`[shared] restored the home screen for ${owner.label || owner.sessionId}`);
+      }
+    } catch {
+      /* best effort: never block or fail the tool call */
+    }
+  }
+
   async function remoteState() {
     const [state, listed] = await Promise.all([
       remoteManager.remoteState(),
@@ -1461,6 +1571,7 @@ export function apply(ctx, config = {}) {
           id: 'default',
           kind: 'default',
           avdName: status.avd || vm.avdName || null,
+          name: instanceManager ? instanceManager.nameFor('default', status.avd || vm.avdName) : status.avd || vm.avdName || null,
           port: vm.port || null,
           state: status.state,
           serial: status.serial || null,
@@ -2538,6 +2649,7 @@ export function apply(ctx, config = {}) {
               id: 'default',
               kind: 'default',
               avdName: defaultStatus.avd || vm.avdName || null,
+              name: instanceManager ? instanceManager.nameFor('default', defaultStatus.avd || vm.avdName) : defaultStatus.avd || vm.avdName || null,
               port: vm.port || null,
               state: defaultStatus.state,
               serial: defaultStatus.serial || null,
@@ -2557,6 +2669,13 @@ export function apply(ctx, config = {}) {
       if (req.method === 'POST') {
         const body = await readJsonBody(req);
         try {
+          if (body && (body.action === 'rename' || body.rename !== undefined)) {
+            const target = String(body.rename !== undefined && body.rename !== true ? body.rename : body.instance || 'default');
+            const renamed = await instanceManager.rename(target, body.name);
+            if (!renamed.ok) throw new Error(renamed.error || 'rename failed');
+            sendJson(res, 200, { ok: true, instance: renamed.id, name: renamed.name, previous: renamed.previous || null });
+            return;
+          }
           const instance = await instanceManager.create({ name: body.name });
           registerInstanceRoutes?.(instance.id);
           const owner = body.ownerKey || body.ownerScope
@@ -4746,10 +4865,13 @@ export function apply(ctx, config = {}) {
     }
     const owner = toolOwnerContext(args, exec);
     const force = ownerTakeoverRequested(args);
+    const previousDefaultOwner = instanceManager ? instanceManager.ownerInfo('default') : null;
     if (requested) {
       if (requested === 'default') {
         if (instanceManager) instanceManager.claimOwner('default', owner, { force });
-        return defaultToolApi();
+        const api = defaultToolApi();
+        if (exec && exec.agent) void restoreSharedDesktop(api, owner, previousDefaultOwner);
+        return api;
       }
       if (!instanceManager) throw new Error('multi-instance support is disabled');
       const instance = instanceManager.get(requested);
@@ -4759,7 +4881,11 @@ export function apply(ctx, config = {}) {
     }
     if (instanceManager && exec && (exec.agent || owner.sessionId)) {
       const assigned = await instanceManager.forOwner(owner, { force });
-      if (assigned && assigned.default === true) return defaultToolApi();
+      if (assigned && assigned.default === true) {
+        const api = defaultToolApi();
+        if (exec && exec.agent) void restoreSharedDesktop(api, owner, previousDefaultOwner);
+        return api;
+      }
       if (assigned && assigned.id) registerInstanceRoutes?.(assigned.id);
       return extraToolApi(assigned);
     }
@@ -5071,7 +5197,7 @@ export function apply(ctx, config = {}) {
       'The VM is usually already running (warm start); adbd runs as root once ready. ' +
       'Actions: info, shell, logcat, getprop, setprop, packages, install, push, pull, reboot, root, ' +
       'force_stop, clear_data, uninstall, rotate, ui_dump, inspect_ui, proxy, install_ca, network, record, perf, screenshot, tap, swipe, long_press, key, text, ' +
-      'apk_info, find_ui, assert_text, tap_text, clipboard_get, clipboard_set, devices, attach_device, detach_device, start, stop, list_instances, create_instance, destroy_instance, owner_status, claim_vm, release_vm, flow_start, flow_stop, flow_list, flow_replay, storage, clean_storage, ' +
+      'apk_info, find_ui, assert_text, tap_text, clipboard_get, clipboard_set, devices, attach_device, detach_device, start, stop, list_instances, create_instance, rename_instance, destroy_instance, owner_status, claim_vm, release_vm, flow_start, flow_stop, flow_list, flow_replay, storage, clean_storage, ' +
       'skill_list, skill_get, skill_save, skill_delete, skill_start, skill_stop, skill_cancel, skill_run, skill_codebook, control_ui, control_features, control_codebook, control_tap, control_input, control_long_press, control_swipe, control_assert, control_wait, control_launch, ' +
       'webview, tap_css, tap_selector, type_text, wait_for, env_snapshot, env_restore, adb. ' +
       'WebView actions use Chrome DevTools Protocol (CDP): webview list|eval|click|wait_for|insert_text over the app WebView. ' +
@@ -5084,7 +5210,9 @@ export function apply(ctx, config = {}) {
       'setprop for system properties, packages to list apps, install to install+launch an APK by local path, ' +
       'push/pull to move files (under /data/local/tmp, /sdcard or /storage/emulated/0), reboot to restart the guest, ' +
       'rotate to lock orientation, ui_dump for the accessibility tree, record for a short MP4, perf for CPU/memory. ' +
-      'Call action=guide to read the full agent playbook (docs/AGENTS.md) — it returns the Markdown itself: recommended workflow, coordinates/dpr, WebView and instance usage, and error handling.',
+      'Call action=guide to read the full agent playbook (docs/AGENTS.md) — it returns the Markdown itself: recommended workflow, coordinates/dpr, WebView and instance usage, and error handling. ' +
+      'The first apk_vm call in a new conversation returns this guide once (forced onboarding) and executes nothing: read it, then repeat your call. ' +
+      'The shared default VM is short-lived and shared by every conversation: for long-lived debugging claim a dedicated VM (ownerScope=conversation or project, or create_instance) instead of holding the shared one, and expect the guest to be reset to its home screen when another conversation enters it.',
     parameters: {
       type: 'object',
       additionalProperties: false,
@@ -5246,6 +5374,8 @@ export function apply(ctx, config = {}) {
             result: { path: 'docs/AGENTS.md' },
           };
         }
+        const guideOwner = toolOwnerContext(args, exec);
+        if (guideOwner && guideOwner.sessionId) markGuideSessionSeen(guideOwner.sessionId);
         return {
           ok: true,
           // DSH renders the tool summary as the model-visible text, so the
@@ -5253,6 +5383,33 @@ export function apply(ctx, config = {}) {
           summary: markdown,
           result: { path: 'docs/AGENTS.md', chars: markdown.length, bytes: Buffer.byteLength(markdown, 'utf8') },
         };
+      }
+
+      // Forced onboarding: the first apk_vm call in a fresh conversation
+      // returns the playbook once and executes nothing (no VM handle, no
+      // lease). Retrying the same action after reading it proceeds normally.
+      if (cfg.guideOnNewSession !== false) {
+        const ownerHint = toolOwnerContext(args, exec);
+        const sessionId = ownerHint && ownerHint.sessionId;
+        if (sessionId && !guideSessionSeen(sessionId)) {
+          markGuideSessionSeen(sessionId);
+          const markdown = readAgentGuide();
+          if (markdown) {
+            return {
+              ok: true,
+              summary:
+                markdown +
+                `\n\n---\n**One-time onboarding:** this guide was returned because this is the first apk_vm call in conversation \`${sessionId}\`; it is now marked as read. Your \`${action}\` call was not executed — repeat it to continue. The shared default VM is a short-lived shared device: for long-lived debugging claim a dedicated VM (ownerScope=conversation or create_instance).`,
+              result: {
+                guideRequired: true,
+                guidePath: 'docs/AGENTS.md',
+                requestedAction: action,
+                sessionId,
+                next: 'repeat the same apk_vm call after reading this guide',
+              },
+            };
+          }
+        }
       }
 
       // Resolve the VM handle lazily: only actions that actually reach the
@@ -5271,6 +5428,7 @@ export function apply(ctx, config = {}) {
             id: 'default',
             kind: 'default',
             avdName: defaultStatus.avd || vm.avdName || null,
+            name: instanceManager ? instanceManager.nameFor('default', defaultStatus.avd || vm.avdName) : defaultStatus.avd || vm.avdName || null,
             port: vm.port || null,
             state: defaultStatus.state,
             serial: defaultStatus.serial || null,
@@ -5284,7 +5442,7 @@ export function apply(ctx, config = {}) {
         ];
         return {
           ok: true,
-          summary: instances.map((entry) => `${entry.id}:${entry.state}${entry.serial ? '@' + entry.serial : ''}${entry.ownerInfo ? ' owned:' + entry.ownerInfo.label : ''}`).join(', '),
+          summary: instances.map((entry) => `${entry.name || entry.id}:${entry.state}${entry.serial ? '@' + entry.serial : ''}${entry.ownerInfo ? ' owned:' + entry.ownerInfo.label : ''}`).join(', '),
           result: { instances, maxInstances: instanceManager ? instanceManager.maxInstances : 1 },
         };
       }
@@ -5303,6 +5461,13 @@ export function apply(ctx, config = {}) {
           summary: `created instance ${instance.id} (avd=${instance.avdName}, port=${instance.port})${ownerInfo ? ' for ' + ownerInfo.label : ''}`,
           result: { id: instance.id, avdName: instance.avdName, port: instance.port, owner: ownerInfo },
         };
+      }
+      if (action === 'rename_instance') {
+        if (!instanceManager) throw new Error('multi-instance support is disabled');
+        const id = String(args.instance || args.name || 'default');
+        const result = await instanceManager.rename(id, args.name || args.instanceName || args.newName || args.label);
+        if (!result.ok) throw new Error(result.error || 'rename failed');
+        return { ok: true, summary: `renamed ${result.id} to ${result.name}`, result };
       }
       if (action === 'destroy_instance') {
         if (!instanceManager) throw new Error('multi-instance support is disabled');

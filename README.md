@@ -45,7 +45,7 @@ same-origin, loopback-only debug HTTP API and an `apk_vm` Agent tool.
 > 当前 **Windows x64 与 Linux x86_64（headless）为端到端已验证平台**；macOS 仅做探测/CI
 > 覆盖，详见 `docs/LINUX-E2E.md`。
 
-**Status:** `0.12.2` · Apache-2.0 · no npm runtime dependencies · no build step.
+**Status:** `0.12.3` · Apache-2.0 · no npm runtime dependencies · no build step.
 
 This is an open-source DSH plugin published on npm as **`dsh-apk-vm`**. Repository:
 [github.com/yuxiaole-bili/dsh-apk-vm](https://github.com/yuxiaole-bili/dsh-apk-vm).
@@ -498,6 +498,13 @@ or `project`), session id, workspace, and `since` / `lastSeenAt` timestamps; lea
   secrets (the SSH key path stays on this host) and is persisted under
   `<profile>/.apk-vm/remote-profile.json`, so the panel card prefills after a restart. Only the
   fixed command shape is executed; every value is validated and single-quote escaped.
+- **Named VMs and per-conversation selection.** Give any VM (including `default` and remote
+  sessions) a display name with `apk_vm {"action":"rename_instance","instance":"default","name":"QA
+  phone"}` or `POST /apk-vm/instances {"action":"rename","instance":"…","name":"…"}`; the panel
+  has a Rename button in the Instances card. Names persist under
+  `<profile>/.apk-vm/instance-names.json`, and `list_instances` / `GET /apk-vm/instances`
+  include `name`. The panel auto-selects the VM owned by the current conversation (falling
+  back to `default`), so a multi-agent setup no longer always shows one fixed VM.
 - **Named AVD snapshots.** `GET /apk-vm/snapshots` lists snapshots;
   `POST /apk-vm/snapshots {"action":"save|load|delete","name":"…"}` manages them. The quick-boot
   snapshot (`snapshotName`, default `default_boot`) is handled automatically. The panel's
@@ -935,8 +942,8 @@ JSON bodies are bounded to 64 KiB; the raw APK upload is bounded to 500 MiB.
 | POST | `/apk-vm/stream/quality` | `{"preset":"low\|balanced\|high"}` — change H.264 resolution/bitrate/fps; the scrcpy session reconnects. |
 | GET (upgrade) | `/apk-vm/ws` | WebSocket H.264 stream (see above). |
 | GET/POST | `/apk-vm/ownership` | `GET` lists VM leases; `POST {"action":"claim\|release\|touch","instanceId":"default","ownerScope":"shared\|conversation\|project","sessionId"?,"workspace"?,"force"?}` manages the owner lease. |
-| GET | `/apk-vm/instances` | List default + extra VM instances, including `owner`, `ownerInfo` (`key`, `label`, `scope`, `sessionId`, `workspace`, `since`, `lastSeenAt`), `lastUsedAt`, `idleMs`, `idleTimeoutMs`, `videoClients`. |
-| POST | `/apk-vm/instances` | `{"name":"agent-a","start":true}` — create an isolated AVD/VM; every extra instance has its own H.264 stream. |
+| GET | `/apk-vm/instances` | List default + extra VM instances, including `name`, `owner`, `ownerInfo` (`key`, `label`, `scope`, `sessionId`, `workspace`, `since`, `lastSeenAt`), `lastUsedAt`, `idleMs`, `idleTimeoutMs`, `videoClients`. |
+| POST | `/apk-vm/instances` | `{"name":"agent-a","start":true}` — create an isolated AVD/VM; every extra instance has its own H.264 stream. `{"action":"rename","instance":"default","name":"QA phone"}` sets a display name. |
 | DELETE | `/apk-vm/instances/:id` | Stop/dispose an extra instance (the default cannot be destroyed). |
 | GET/POST | `/apk-vm/instances/:id/...` | Per-instance mirror of `state`, `frame`, `vm`, `input`, `install`, `upload`, `debug/*`. |
 | GET | `/apk-vm/activity?limit=&beforeId=&action=&instanceId=&ok=` | Agent activity journal, newest first, with `stats`; `enabled: true`. |
@@ -1010,6 +1017,13 @@ An agent-facing playbook ships in [docs/AGENTS.md](docs/AGENTS.md) and is readab
 with `{"action":"guide"}` (or `GET /apk-vm/guide`): the standard loop, action map,
 device-pixel vs CSS-coordinate rules, WebView/CDP usage, instance and remote-session handling,
 and error recovery.
+
+The **first `apk_vm` call in a new conversation** returns that guide once
+(`result.guideRequired: true`) and executes nothing: read it, then repeat the call. The default
+instance is a shared, short-lived device; when a conversation needs a long-lived debugging VM,
+claim a dedicated one with `ownerScope=conversation`/`project` (or `create_instance`) instead of
+holding the shared VM. Entering the shared VM from a different conversation resets the guest to
+its home screen.
 
 For concurrent Agents, pass `instance` to target a specific VM; when omitted, the tool resolves
 the calling Agent's lease and assigned instance (first conversation → default VM, later
@@ -1229,6 +1243,12 @@ is not expected to finish booting that way.
   `%USERPROFILE%\.android\avd\<avdName>.avd\snapshots\<snapshotName>`), then start cold again.
 - A snapshot directory with `ram.img` but no `snapshot.pb` is not a valid snapshot; the plugin
   ignores it. Delete it or set `quickBoot: false` once to force a clean cold boot.
+- **Corrupt snapshots heal themselves.** If restoring the quick-boot snapshot crashes the
+  emulator (`emulator exited (code 3221225477…)`, Windows access violation `0xC0000005`) or the
+  files look partially written (`snapshot.pb` much newer than `ram.bin`), the plugin quarantines
+  the directory as `snapshots/<name>.corrupt-<timestamp>`, retries once as a cold boot and
+  rebuilds a fresh snapshot. The quarantine path is reported in `status().snapshotRecovery`; the
+  old directory can be deleted.
 - If a stale offline adb emulator is attached, `adb kill-server` (or kill the leftover
   `emulator`/`qemu-system-*` process) and retry.
 

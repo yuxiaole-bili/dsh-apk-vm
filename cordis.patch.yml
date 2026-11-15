@@ -32,6 +32,10 @@
         # lives in <profile>/.apk-vm/installed-apps.json; uploaded APKs are kept
         # under <profile>/.apk-vm/apks (newest 10). Set false to opt out.
         autoReinstall: true
+        # The first apk_vm call in a new conversation returns the agent playbook
+        # once (docs/AGENTS.md) instead of executing the action. Set false to let
+        # new conversations act immediately.
+        guideOnNewSession: true
         # Multiple isolated VMs: the first Agent gets the default instance;
         # later Agents get their own AVD/port until maxInstances extra VMs.
         multiInstance: true
