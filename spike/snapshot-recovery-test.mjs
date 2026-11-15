@@ -37,6 +37,21 @@ function writeSnapshot({ pbSize = 4096, ramSize = 256 * 1024 * 1024, pbAgeMs = 0
 try {
   mkdirSync(avdDir, { recursive: true });
 
+  // Constructor must initialise the boot-speed fields; an undefined
+  // _accelAvailable made _detectAcceleration() return undefined and the VM
+  // refused to start with a bogus "no usable CPU hypervisor" error (0.12.3
+  // regression, caught by the 0.12.4 hotfix).
+  {
+    const vm = makeVm();
+    assert.equal(vm._accelAvailable, null, 'constructor initialises _accelAvailable');
+    assert.equal(vm._snapshotSave, null, 'constructor initialises _snapshotSave');
+    assert.equal(vm._lastLaunchArgs, null, 'constructor initialises _lastLaunchArgs');
+    const available = await vm._detectAcceleration();
+    assert.equal(typeof available, 'boolean', '_detectAcceleration returns a boolean');
+    assert.equal(vm._accelAvailable, available, 'detection result is cached');
+    console.log('PASS constructor boot-speed fields and accel detection');
+  }
+
   // No snapshot at all.
   rmSync(snapDir, { recursive: true, force: true });
   assert.equal(makeVm()._snapshotPresent(), false, 'missing snapshot is not present');

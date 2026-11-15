@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.12.4
+
+### Fixed
+
+- **Hypervisor detection regression from 0.12.3.** A refactor of the boot-speed
+  bookkeeping dropped three constructor initialisers (`_accelAvailable`,
+  `_snapshotSave`, `_lastLaunchArgs`). `_accelAvailable` stayed `undefined`, so
+  `_detectAcceleration()` short-circuited on `!== null` and returned
+  `undefined`; every start then failed with a bogus "No usable CPU hypervisor
+  (AEHD/WHPX) was found" error even on hosts where `emulator -accel-check`
+  reported AEHD/WHPX usable. The fields are restored, and
+  `spike/snapshot-recovery-test.mjs` now asserts their initial values and that
+  `_detectAcceleration()` returns a boolean, so this regression cannot silently
+  ship again.
+
 ## 0.12.3
 
 ### Added
