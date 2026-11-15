@@ -30,7 +30,8 @@
     "rooted-android"
   ],
   "engines": {
-    "node": ">=20"
+    "node": ">=20",
+    "dsh": ">=0.2.1-rc.3 || >=0.2.2-rc.1"
   },
   "publishConfig": {
     "access": "public",
@@ -106,6 +107,12 @@
     "CHANGELOG.md"
   ],
   "dsh": {
+    "compatibility": {
+      "dshReleases": {
+        "0.2.1-rc.3+": "compatible",
+        "0.2.2-rc.1+": "compatible"
+      }
+    },
     "bundle": {
       "patch": "./cordis.patch.yml"
     },

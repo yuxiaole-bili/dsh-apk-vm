@@ -113,9 +113,22 @@ and Agent-facing UI automation for development workflows.
   the system image — roughly 2.5 GB on a cold machine), for manual downloads you trigger, or
   when you configure a remote adb device.
 
+**Supported DSH versions**
+
+The package declares its DSH compatibility in `package.json` so the plugin manager and market can
+check it before install and activation:
+
+- `engines.dsh`: `>=0.2.1-rc.3 || >=0.2.2-rc.1` — tested against DSH Desktop `0.2.1-rc.3`
+  (static bundle/plugin APIs) and DSH Desktop `0.2.2-rc.3` (current reference host: release
+  `0.2.2-rc.3`, Node `24.21.0`, host protocol v4). Older DSH releases are rejected by the plugin
+  manager as `incompatible-version`; a version exemption can still be granted manually.
+- `dsh.compatibility.dshReleases`: `0.2.1-rc.3+`, `0.2.2-rc.1+` → `compatible` (market metadata).
+- DSH releases newer than the tested range are expected to work through the stable static
+  bundle/plugin APIs, but are not claimed as verified here. See the
+  [DSH plugin API documentation](https://dsh-plugin.org/) for the bundle/plugin contract.
+
 **Compatibility**
 
-- Tested with DSH Desktop `0.2.1-rc.3` (static bundle/plugin APIs).
 - Windows x64 and Linux x86_64 (headless, KVM + SwiftShader) are verified end-to-end
   (boot, H.264, rooted debug, APK install, Agent tool). macOS has SDK discovery + headless CI
   coverage but no live emulator run in this repository.

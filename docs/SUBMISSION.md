@@ -37,7 +37,9 @@ DSH Desktop（`desktop` profile）通过 **Plugins → add/install local bundle*
 
 ### 兼容与运行要求
 
-- DSH Desktop `0.2.1-rc.3` 已实测；静态 bundle/plugin API。
+- DSH Desktop `0.2.1-rc.3` 与 `0.2.2-rc.3` 已实测（静态 bundle/plugin API）；`package.json`
+  声明 `engines.dsh: ">=0.2.1-rc.3 || >=0.2.2-rc.1"`、`dsh.compatibility.dshReleases`，插件中心/
+  插件管理器会在安装与激活前检查；更旧的 DSH 版本按 `incompatible-version` 拒绝。
 - Windows x64 与 Linux x86_64（headless，KVM + SwiftShader）为端到端验证平台（启动、
   H.264、root 调试、APK 安装、Agent tool）；macOS 有 SDK 探测/headless CI 覆盖，但未做
   真实模拟器运行验证。详见 `docs/LINUX-E2E.md`。

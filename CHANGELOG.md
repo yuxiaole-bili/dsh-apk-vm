@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+
+- **DSH compatibility metadata.** `package.json` now declares `engines.dsh`
+  (`>=0.2.1-rc.3 || >=0.2.2-rc.1`) and `dsh.compatibility.dshReleases` (`0.2.1-rc.3+`,
+  `0.2.2-rc.1+` → `compatible`), so the plugin manager and market can verify supported DSH
+  releases before install/activation instead of failing at runtime. README now has a
+  "Supported DSH versions" section (tested: DSH Desktop 0.2.1-rc.3 and 0.2.2-rc.3) and
+  `docs/SUBMISSION.md` lists the same tested matrix.
+
 ## 0.12.2
 
 ### Fixed
