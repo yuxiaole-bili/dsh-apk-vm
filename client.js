@@ -30,7 +30,7 @@ window.__ModuleLoader__.load({
     var SWIPE_THRESHOLD_PX = 24;
     var FRAME_INTERVAL_MS = 500;
     var STATE_INTERVAL_MS = 2000;
-    var CLIENT_VERSION = '0.11.1';
+    var CLIENT_VERSION = '0.12.2';
 
     /* ------------------------------------------------------------------ *
      * Optional dsh-better-sidebar integration.
@@ -2805,7 +2805,7 @@ window.__ModuleLoader__.load({
             pillMeta.push(T(bootKey, { s: bootSeconds }));
           }
         }
-        pillMeta.push('v' + CLIENT_VERSION);
+        pillMeta.push('v' + (hostVersion || CLIENT_VERSION));
         var ownerSnapshot = snapshot && isObject(snapshot.owner) ? snapshot.owner : null;
         if (ownerSnapshot) {
           var ownerPillLabel = String(ownerSnapshot.label || ownerSnapshot.key || '').slice(0, 48);

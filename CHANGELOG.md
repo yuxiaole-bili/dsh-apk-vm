@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.12.2
+
+### Fixed
+
+- **Panel version chip reported `v0.11.1`.** `client.js` kept a hand-maintained `CLIENT_VERSION`
+  constant that was never bumped after 0.11.1, so the header pill showed the wrong version on
+  0.12.0/0.12.1 even though the host reported the correct `pluginVersion`. The chip now prefers
+  the host-reported version, the constant is set to `0.12.2`, and `scripts/check-version.mjs`
+  (run by `npm run check`) fails the build when `CLIENT_VERSION` and `package.json` disagree.
+
 ## 0.12.1
 
 ### Added
