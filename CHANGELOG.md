@@ -142,12 +142,16 @@ reset, and the plugin can provision its own JDK / Android SDK / system image / A
 - `webviewAction=eval` returned `null` for `DOMRect`/`MediaQueryList` and other non-by-value
   values; it now returns a readable snapshot.
 
-## 1.0.0
+### Historical: planned 1.0.0, shipped as 0.12.0
+
+> These notes were written for a 1.0.0 cut that was renumbered to 0.12.0 before
+> release. They are kept here for history, so no 1.0.0 that never shipped appears
+> between the 0.12.0 and 0.11.1 sections.
 
 Observability and reliability release: a local Agent activity journal, hardened device
 interactions, and a first-class zero-config provisioning chain.
 
-### Added
+#### Added
 
 - **Agent activity log.** Every `apk_vm` tool call and every mutating panel/HTTP request is
   journaled locally as JSONL under `<profile>/.apk-vm/activity` (override with `activityDir`);
@@ -182,7 +186,7 @@ interactions, and a first-class zero-config provisioning chain.
 - WebView control docs and examples now point at `webview`/`tap_css`/`tap_selector`
   as the preferred path for DOM content.
 
-### Changed
+#### Changed
 
 - `sdkmanager` installs (`installSystemImage`, `installSdkPackages`) always pass
   `--sdk_root=<sdkRoot>`, so a `sdkmanager` found elsewhere on `PATH` cannot install into the
@@ -194,7 +198,7 @@ interactions, and a first-class zero-config provisioning chain.
   physical devices and snapshots; expanded troubleshooting for the fixes above; macOS/arm64
   image selection documented; demo media checked in.
 
-### Fixed
+#### Fixed
 
 - `adb` tool action failed with `Cannot access 'api' before initialization` on every call — the
   tool API is now resolved lazily per action.
@@ -229,15 +233,13 @@ interactions, and a first-class zero-config provisioning chain.
   and per-candidate timeouts plus the known-good JDK table make it fail over instead.
 - macOS arm64 provisioning selected the x86_64 image; it now defaults to `arm64-v8a`.
 
-### Fixed
-
 - `GET/POST /apk-vm/camera` accepted poster paths that did not exist; save/apply now reject
   missing or unreadable `-virtualscene-poster` files with the offending poster name and path
   instead of failing later on the next emulator launch.
 
-### Zero-config first run
+##### Zero-config first run
 
-### Added
+##### Added
 
 - **Automatic environment provisioning (`autoSetup`, default `true`).** The first
   `GET /apk-vm/state` or `GET /apk-vm/setup` request — opening the panel, or an Agent's first
@@ -260,7 +262,7 @@ interactions, and a first-class zero-config provisioning chain.
 - `GET /apk-vm/setup` now reports `javaHome` / `javaPresent`; the Environment card shows a Java
   row plus live auto-setup progress with cancel/retry.
 
-### Changed
+##### Changed
 
 - `findJavaHome()` also looks in the plugin-managed JDK directory and `extraJavaHomes`, so
   `sdkmanager`/`avdmanager` work without a system-wide JDK or `JAVA_HOME`.
@@ -269,7 +271,7 @@ interactions, and a first-class zero-config provisioning chain.
   `autoStart` flow — a cold install goes from zero to a running VM without extra clicks.
 - First-run documentation is now install → open the panel → automatic provisioning → VM start.
 
-### Fixed
+##### Fixed
 
 - The Environment card could stay empty on exactly the machines that needed setup: a
   `GET /apk-vm/setup` payload with `ok: false` was treated as a failed request. It now renders
