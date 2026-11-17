@@ -45,7 +45,7 @@ same-origin, loopback-only debug HTTP API and an `apk_vm` Agent tool.
 > 当前 **Windows x64 与 Linux x86_64（headless）为端到端已验证平台**；macOS 仅做探测/CI
 > 覆盖，详见 `docs/LINUX-E2E.md`。
 
-**Status:** `0.12.4` · Apache-2.0 · no npm runtime dependencies · no build step.
+**Status:** `0.12.5` · Apache-2.0 · no npm runtime dependencies · no build step.
 
 This is an open-source DSH plugin published on npm as **`dsh-apk-vm`**. Repository:
 [github.com/yuxiaole-bili/dsh-apk-vm](https://github.com/yuxiaole-bili/dsh-apk-vm).
@@ -96,7 +96,10 @@ and Agent-facing UI automation for development workflows.
 - Hardware virtualization: AEHD/WHPX on Windows, KVM on Linux, or HVF on macOS.
 - Node.js ≥ 20 only for the repository's headless checks; the plugin itself has no npm
   dependencies or build step.
-- Each running VM costs roughly 2.5 GB RAM; `maxInstances` defaults to 3 extra VMs.
+- Each running VM costs roughly 2–3 GB of host RAM (`hw.ramSize` 1.5 GB default plus
+  emulator/GPU overhead); `maxInstances` defaults to 3 extra VMs. The `memoryGuard` (default on)
+  caps the effective count from total host RAM and the `vmPreset: lite` preset shrinks the guest
+  to 1 GB / 2 vCPU for 8–16 GB machines.
 
 **Permissions / risk**
 
@@ -197,6 +200,26 @@ key {"text":"HOME"}       -> returned to launcher
   configured system image and the AVD, with live progress plus cancel/retry in the Environment
   card (`autoSetup` on `GET/POST /apk-vm/setup`). The normal `autoStart` flow then boots the VM;
   set `autoSetup: false` to keep setup manual.
+- **Download resilience for the zero-config first run.** Every provisioning step retries
+  transient network failures with exponential backoff (`setupRetries: 3`, `retryDelayMs: 2000`)
+  and no-data stalls are detected by a 45 s no-progress watchdog, so a link that dies at 10 %
+  resumes instead of hanging. The JDK archive resumes from a `.partial` file with HTTP Range and
+  is re-verified against the SHA-256 checksum on each attempt; a configurable mirror
+  (`jdkMirror`) bypasses unreachable GitHub assets. The command-line-tools archive can point at
+  a mirror or proxy (`commandLineToolsUrl`, `commandLineToolsSha256`, `sdkManagerArgs`,
+  `sdkManagerEnv`, `networkProxy`), and the cumulative free-disk budget
+  (`minFreeDiskBytes`, default 6 GB) is checked before provisioning starts.
+- **Memory guard, Lite mode and instance management.** A local emulator costs ~2–3 GB of host
+  RAM, so with `memoryGuard` on (default) the effective `maxInstances` is derived from total
+  host RAM (8 GB → 1; 16 GB → 3 with the default requested cap; clamped to 1–8), free host RAM
+  is checked at start, and a low-memory machine refuses to start another VM with a clear error
+  instead of swapping itself to death. On a 16 GB desktop that also runs an IDE and a browser,
+  keep `maxInstances` at 2 or switch to `vmPreset: lite`, which
+  shrinks the AVD to 1 GB RAM / 2 vCPU / SwiftShader with a 720p30 H.264 stream, and
+  `memoryPressureReap` (default on) stops the least-recently-used idle local VM when memory is
+  tight (extra VMs are stopped, never destroyed). The VM instances card shows host RAM, the
+  effective cap, the preset and the per-VM RAM/vCPU profile; `GET /apk-vm/state` and
+  `GET /apk-vm/emulators` expose the same `memory` object.
 - **Multi-agent isolation / multi-instance.** Several DSH Agents can drive separate VMs at the
   same time: each conversation owns a renewable lease on the VM it uses, so a second
   conversation never silently steals the first one's emulator. The first conversation gets the
@@ -732,14 +755,27 @@ config:
   maxInstances: 3                  # extra VMs (default VM is always available)
   instanceIdleMs: 900000           # stop idle extra VMs after 15 min (AVD kept)
   instanceReapIntervalMs: 60000
+  memoryGuard: true                # cap instances from host RAM; refuse low-memory starts
+  # hostReserveMb: 4096            # RAM kept for the host/other apps
+  # estimatedVmMb: 3072            # estimated cost of one local emulator
+  vmPreset: standard               # standard | lite (1 GB / 2 vCPU / SwiftShader / 720p30)
+  memoryPressureReap: true         # stop LRU idle VMs before creating another one
   leaseTtlMs: 1800000              # VM owner lease lifetime; renewed by apk_vm calls
   allowRemote: false               # reject non-loopback VM API clients
   autoSetup: true                  # zero-config first run: auto-provision JDK 17 + SDK + image + AVD
+  setupRetries: 3                  # retries per provisioning step (exponential backoff)
+  retryDelayMs: 2000
+  # minFreeDiskBytes: 6442450944   # cumulative free-disk budget before provisioning
   # jdkRoot: 'C:/tools/dsh-jdk'   # where the auto-downloaded JDK 17 lives
   # jdkVersion: 17                 # Temurin major version to provision (known-good table covers 17.0.21+9)
   # jdkMirror: 'https://mirrors.tuna.tsinghua.edu.cn/Adoptium'  # override the JDK mirror fallback
   # activityDir: 'C:/tools/apk-vm-activity'  # journal + screenshot storage (default <profile>/.apk-vm/activity)
   allowSetupDownloads: false       # gate the optional manual system-image download action
+  # commandLineToolsUrl: 'https://example.com/commandlinetools-win-latest.zip'  # mirror for the tools archive
+  # commandLineToolsSha256: '...'  # checksum for the custom archive
+  # sdkManagerArgs: ['--no_https'] # passed verbatim to sdkmanager (mirrors / flags)
+  # sdkManagerEnv: { SDK_TEST_BASE_URL: 'https://mirror.example.com/android/repository/' }
+  # networkProxy: { host: 127.0.0.1, port: 7890 }  # --proxy_* flags for sdkmanager only
   scrcpy: true
   scrcpyMaxSize: 960
   scrcpyMaxFps: 60
@@ -804,6 +840,11 @@ All keys are optional; defaults are shown in the **Default** column.
 | `mic` | `{ mode: "off" }` | Guest microphone: `off` / `host` (host input passthrough) / `file` (loop an audio file into a virtual source; Linux and remote hosts). Optional `backend`, `filePath`. |
 | `multiInstance` | `true` | Allow isolated extra VMs for concurrent Agents. |
 | `maxInstances` | `3` | Maximum number of extra instances (in addition to the default VM). Each running instance costs guest RAM/CPU. |
+| `memoryGuard` | `true` | Cap the effective instance count from host RAM and refuse to start a local VM when free memory is below the reserve. Remote sessions are not counted. |
+| `hostReserveMb` | `4096` | Host RAM kept free when computing the effective cap / deciding whether a new VM fits. |
+| `estimatedVmMb` | `3072` | Estimated host RAM used by one local emulator (AVD RAM + qemu/GPU overhead) for the guard and the panel estimate. |
+| `vmPreset` | `standard` | `standard` or `lite` (1 GB guest RAM, 2 vCPU, SwiftShader GPU, 1 fps PNG / 720p30 H.264). Applies to the default AVD (rewritten on activation) and to extra instances. |
+| `memoryPressureReap` | `true` | When memory is tight, stop the least-recently-used idle local VM before creating another one. Extra VMs are stopped, never destroyed. |
 | `instanceIdleMs` | `900000` | Stop an extra instance after this long without panel frames, a video client, or an Agent command (AVD is kept). |
 | `instanceReapIntervalMs` | `60000` | How often the idle reaper checks extra instances. |
 | `leaseTtlMs` | `1800000` | Lifetime of a VM owner lease. Every `apk_vm` call that routes to the VM renews it; set `0` to disable expiry. |
@@ -813,6 +854,14 @@ All keys are optional; defaults are shown in the **Default** column.
 | `jdkRoot` | `~/.dsh/apk-vm/jdk` | Where the auto-downloaded Temurin JDK 17 is installed. A system JDK / `JAVA_HOME` is preferred when present. |
 | `jdkVersion` | `17` | Temurin major version to provision when `autoSetup` needs a JDK. |
 | `jdkMirror` | built-in Tsinghua mirror | Mirror base URL (or array of bases) used for the Temurin JDK archive when the GitHub-hosted Adoptium download is unreachable, verified with the same SHA-256 checksum. Env: `DSH_APK_VM_JDK_MIRROR`; an empty value disables the fallback. |
+| `setupRetries` | `3` | Automatic retries per provisioning step after a transient network/command failure (exponential backoff). |
+| `retryDelayMs` | `2000` | Base delay between provisioning retries; doubled each attempt. |
+| `minFreeDiskBytes` | `6442450944` (6 GB) | Cumulative free-disk budget checked before provisioning starts (JDK + tools + image + AVD). |
+| `commandLineToolsUrl` | Google archive | Optional mirror URL for the command-line-tools archive (checksum option below). |
+| `commandLineToolsSha256` | — | Optional SHA-256 for `commandLineToolsUrl`; the download is verified like the JDK. |
+| `sdkManagerArgs` | `[]` | Extra arguments passed verbatim to `sdkmanager` (for example `["--no_https"]` for a mirror). |
+| `sdkManagerEnv` | `{}` | Extra environment variables for `sdkmanager` (for example `SDK_TEST_BASE_URL` for an SDK mirror). |
+| `networkProxy` | — | `{host, port, user, password}` translated into `--proxy_*` flags for `sdkmanager` only; the plugin itself never proxies its own requests. |
 | `activityDir` | `<profile>/.apk-vm/activity` | Where the Agent activity journal (`activity.jsonl`) and its screenshots are stored. |
 | `frameFps` | `2` | PNG fallback target frame rate, 1–10 (the H.264 path is not affected). |
 | `scrcpy` | `true` | Enable the H.264/WebCodecs transport. |
@@ -830,6 +879,15 @@ per-action availability. It also carries the auto-setup state: `autoSetupEnabled
 `autoSetup { state, step, totalSteps, stepId, message, error, warnings[], startedAt,
 finishedAt }`; `POST /apk-vm/setup` with `{ action: "auto-setup" }` starts/retries provisioning
 and `{ action: "cancel-auto-setup" }` cancels it.
+
+`GET /apk-vm/state`, `GET /apk-vm/emulators`, `GET /apk-vm/instances` and the
+`apk_vm` `list_instances` action also expose a `memory` object:
+`{ available, totalMb, freeMb, reserveMb, estimatedVmMb, guard, pressureReap,
+requestedMaxInstances, effectiveMaxInstances, preset: { name, ramSizeMb, cores, ... },
+limited, reason }`. It is the same object the panel uses for the host-memory line and the
+instance cap. `POST /apk-vm/instances` (create) and `create_instance` honour it: when a local VM
+does not fit, the request fails with an actionable error, or `memoryPressureReap` stops an idle
+VM first.
 
 ---
 
@@ -865,6 +923,7 @@ and `{ action: "cancel-auto-setup" }` cancels it.
 | Setup | [lib/setup.js](lib/setup.js), [lib/jdk.js](lib/jdk.js), [lib/autosetup.js](lib/autosetup.js) | Dependency-free SDK / adb / emulator / AVD / acceleration detection plus one-click `create-avd` and optional `install-image`; `lib/jdk.js` provisions a managed Temurin JDK 17 and `lib/autosetup.js` runs the first-use auto-provisioning chain. |
 | Journal | [lib/activity-log.js](lib/activity-log.js) | Records every `apk_vm` tool call and every mutating panel/HTTP request (`source: tool|http|system`; action, argument preview, result/error, duration, instance, screenshot for mutating actions) as local JSONL + PNGs; backs the panel timeline and the `/apk-vm/activity` routes. |
 | Installed apps | [lib/installed-apps.js](lib/installed-apps.js) | Persists APKs installed through the plugin (`<profile>/.apk-vm/installed-apps.json`, archived copies under `<profile>/.apk-vm/apks`) and re-installs missing packages on the next boot (`autoReinstall`). |
+| Memory | [lib/memory.js](lib/memory.js) | Host RAM snapshot, effective instance cap derived from RAM, `standard` / `lite` preset resolution and the low-memory start checks used by `lib/instances.js`; exposed as `memory` on `GET /apk-vm/state`, `/apk-vm/emulators` and `/apk-vm/instances`. |
 | Streaming | scrcpy 5.0.1 server (`lib/vendor/scrcpy-server-v5.0.1.jar`, pushed to `/data/local/tmp/scrcpy-server.jar`) + [lib/scrcpy.js](lib/scrcpy.js) | H.264 screen capture and the scrcpy control protocol, without the desktop scrcpy client. |
 | Device bridge | `adb` from Android SDK platform-tools | install / launch / screencap / input / logcat / file push-pull. |
 | Plugin runtime | DSH plugin APIs (`slots`, `locale`, `webServer`, `tools`, `dsh.client`) | Sidebar entry, main panel, same-origin HTTP/WebSocket control plane, agent tool. |
@@ -1095,6 +1154,13 @@ screen legitimately shows a low FPS. The 60 Hz animation test sustains ~59 fps o
 The `Target FPS` selector applies only to the PNG fallback; the H.264 path is capped by
 `scrcpyMaxFps`.
 
+Host memory is the other cost driver: each local emulator costs roughly 2–3 GB (1.5 GB AVD RAM
+plus qemu/GPU overhead). With `memoryGuard: true` the effective instance cap is derived from
+total RAM minus `hostReserveMb` (4 GB) divided by `estimatedVmMb` (3 GB), then clamped by
+`maxInstances`: 8 GB → 1 VM, 16 GB → 3 (the default requested cap), 32 GB+ → 3. A 16 GB desktop
+that also runs an IDE and a browser is happier with `maxInstances: 2`; `vmPreset: lite` lowers
+the guest to 1 GB / 2 vCPU / SwiftShader and a 720p30 stream when you need a third.
+
 ---
 
 ## Verification
@@ -1188,15 +1254,32 @@ card starts provisioning automatically; while it runs you see the current step p
 
 ### Auto-setup fails or is stuck
 
-The card shows the last step and the error (`autoSetup.error` in `GET /apk-vm/setup`). Common
-causes: no network access to `api.adoptium.net` / `dl.google.com` (or to `github.com`, where
-Adoptium hosts the JDK archive — the built-in Tsinghua mirror is tried automatically), a proxy or
-firewall, an antivirus locking freshly extracted files, or less than ~3 GB free disk space. Press
-**Retry**: the JDK archive is reused when its SHA-256 checksum matches, so retries do not
-re-download it; a mirror can be pinned with `jdkMirror` (or `DSH_APK_VM_JDK_MIRROR`).
-You can also set `autoSetup: false` and provision manually (see
+The card shows the last step and the error (`autoSetup.error` in `GET /apk-vm/setup`). Each
+provisioning step is retried automatically (`setupRetries`, default 3, exponential backoff) and
+downloads that stop transferring data are aborted by a 45 s no-progress watchdog, so a link that
+dies mid-download recovers instead of hanging. Common causes: no network access to
+`api.adoptium.net` / `dl.google.com` (or to `github.com`, where Adoptium hosts the JDK archive —
+the built-in Tsinghua mirror is tried automatically), a proxy or firewall, an antivirus locking
+freshly extracted files, or less than the required free disk space (`minFreeDiskBytes`, default
+6 GB, is checked before provisioning). Press **Retry**: the JDK archive is reused when its
+SHA-256 checksum matches and resumes from a `.partial` file with HTTP Range otherwise; a mirror
+can be pinned with `jdkMirror` (or `DSH_APK_VM_JDK_MIRROR`). For proxies and mirrors behind the
+SDK downloads set `networkProxy` (translated to `sdkmanager --proxy_*` flags), `sdkManagerArgs`,
+`sdkManagerEnv`, or point `commandLineToolsUrl` / `commandLineToolsSha256` at your own tools
+archive. You can also set `autoSetup: false` and provision manually (see
 [step 3](#3-provide-an-android-sdk-system-image-and-avd-automatic-by-default)); parts that already
 succeeded are skipped on the next attempt.
+
+### The VM refuses to start because the host is low on memory
+
+With `memoryGuard: true` (default) a local emulator is only started when the host has room for
+it: total RAM minus `hostReserveMb` (4 GB) divided by `estimatedVmMb` (~3 GB) gives the
+effective instance cap (`GET /apk-vm/state` → `memory.effectiveMaxInstances`; the panel shows it
+on the VM instances card). Close other emulators/apps, raise `hostReserveMb`/`estimatedVmMb` only
+after measuring, set `vmPreset: lite` to shrink new guests to 1 GB / 2 vCPU, enable
+`memoryPressureReap` (default) so idle VMs are stopped first, or move work to a remote VM
+(`/apk-vm/remote`, see [Remote VM host over SSH](#remote-vm-host-over-ssh)). `memoryGuard: false`
+disables the check.
 
 ### "No usable CPU hypervisor (AEHD/WHPX) was found"
 
@@ -1423,6 +1506,11 @@ before pointing the DSH Web UI at an untrusted network.
   services; network activity is limited to `autoSetup` provisioning (Temurin JDK from
   `api.adoptium.net` or its mirror, then the SDK packages/image through the user's own
   `sdkmanager`, which contacts Google's SDK repository) and the same-origin DSH Web server.
+- **Provisioning proxy/mirror settings stay with the child process.** `networkProxy` is translated
+  into `sdkmanager --proxy_*` flags only, and `sdkManagerArgs` / `sdkManagerEnv` are passed to the
+  child `sdkmanager` invocation only. The plugin never proxies its own requests, and none of these
+  values (including a proxy password) is written to the activity journal or exposed on HTTP
+  routes.
 - **The Agent activity log is local-only.** Tool-call journal entries and screenshots are written
   under `<profile>/.apk-vm/activity` on this host and are never sent anywhere. They can contain
   screen content and command arguments, so clear the journal before sharing a recording of the
@@ -1464,6 +1552,17 @@ customization remain research notes in [DESIGN.md](DESIGN.md) §8.
 - **The virtual microphone `file` mode needs a Linux/PulseAudio host.** On Windows only `host`
   passthrough is available, and camera/mic changes apply to a running default VM only after it is
   restarted.
+- **The memory guard is an estimate, not a hard limit.** It reads host totals (`os` APIs), assumes
+  `estimatedVmMb` per local VM and refuses/clamps new local VMs, but it cannot stop an externally
+  started emulator and it counts remote sessions as zero host RAM. Set `memoryGuard: false` if the
+  estimate is too conservative for your machine.
+- **`vmPreset: lite` resizes hardware profiles, not a running guest.** The default AVD's
+  `hw.ramSize`/`hw.cpu.ncore` are rewritten on activation and extra instances get them at create
+  time; an already running VM must be restarted to pick them up.
+- **Download resume is partial.** The JDK archive resumes from `.partial` with HTTP Range and is
+  checksum-verified on every retry; the command-line-tools archive, SDK packages and system image
+  are retried per step (whole-file), and `sdkmanager` owns its own retry/proxy behaviour. The 45 s
+  no-progress watchdog applies to the JDK and command-line-tools downloads.
 
 - **Windows x64 and Linux x86_64 are the end-to-end verified platforms.** macOS SDK/adb/
   emulator/AVD discovery is implemented and `arm64` hosts automatically select the

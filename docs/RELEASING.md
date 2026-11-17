@@ -8,12 +8,13 @@ Repository: <https://github.com/yuxiaole-bili/dsh-apk-vm>.
 ## Publish to npm
 
 The package is intentionally public and has no build step; publishing the repository directory is
-enough:
+enough. **The default registry on the reference host is a mirror (`registry.npmmirror.com`);
+publishing must target npm explicitly**, otherwise `npm publish` fails with `E404`:
 
 ```bash
-npm login                      # once per machine, as the npm account that owns dsh-apk-vm
-npm publish --access public    # prepublish uses the packed file list
-npm view dsh-apk-vm version    # verify the published version
+npm whoami --registry=https://registry.npmjs.org   # once per machine/account
+npm publish --access public --registry=https://registry.npmjs.org
+npm view dsh-apk-vm version --registry=https://registry.npmjs.org   # verify
 ```
 
 The GitHub release tarball and the npm tarball are produced from the same `npm pack` output.
@@ -78,7 +79,10 @@ The in-app Plugin Manager title/description comes from `locale/en.json` and `loc
 
 ## Versioning
 
-- `package.json` and `CHANGELOG.md` move together.
+- `package.json`, `CHANGELOG.md` and `CHANGELOG.zh-CN.md` move together (the Chinese file mirrors
+  the 0.12.x entries; the pre-0.12 history stays English-only in `CHANGELOG.md`).
+- `client.js` `CLIENT_VERSION` must match `package.json`; `npm run check` runs
+  `scripts/check-version.mjs` and fails the release if they disagree.
 - Use `0.x.y` while the plugin API/route surface may still change.
 - Keep `SECURITY.md` supported-version table in sync.
 - Tag the release (`git tag -a v0.3.12 -m ...`) and attach the tarball produced by
@@ -94,6 +98,8 @@ The in-app Plugin Manager title/description comes from `locale/en.json` and `loc
 - [ ] Demo media (if any) recorded on a real host and listed in `docs/README.md`
 - [ ] README install instructions use `<path-to-repo>` / user-chosen paths
 - [ ] Release notes call out known limitations (Windows E2E only, no audio, etc.)
+- [ ] `CHANGELOG.zh-CN.md` updated for the release (0.12.5+ promise; keep it in sync with
+      `CHANGELOG.md`)
 
 ## Known limitations to state in the release
 

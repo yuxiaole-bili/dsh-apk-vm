@@ -121,6 +121,28 @@ function loadMediaSettings(dataRoot, cfg) {
   }
 }
 
+/**
+ * Optional AVD hardware profile ("lite" mode) for memory-constrained hosts.
+ * A null result means "standard": the existing defaults are kept untouched.
+ * InstanceManager normalizes the same setting for extra instances.
+ */
+const VM_PRESET_LITE = Object.freeze({
+  name: 'lite',
+  ramSizeMb: 1024,
+  cores: 2,
+  gpuMode: 'swiftshader_indirect',
+  frameFps: 1,
+  scrcpyMaxSize: 720,
+  scrcpyMaxFps: 30,
+});
+
+function normalizeVmPreset(value) {
+  if (!value || value === 'standard') return null;
+  if (value === 'lite') return VM_PRESET_LITE;
+  if (typeof value === 'object' && !Array.isArray(value)) return { name: 'custom', ...value };
+  return null;
+}
+
 function isReady(vm) {
   return vm && vm.state === 'ready';
 }
@@ -329,6 +351,12 @@ export function apply(ctx, config = {}) {
   const dataRoot = resolveRoots(ctx, cfg.roots)[0] || process.cwd();
   const mediaSettings = loadMediaSettings(dataRoot, cfg);
   const initialMedia = mediaLaunchOptions(mediaSettings);
+  // Lite mode is applied to the default VM as well: GPU + frame rate are part
+  // of the AndroidVm options (the AVD RAM/CPU profile is patched separately),
+  // while extra instances get the same profile from InstanceManager.
+  const vmPreset = normalizeVmPreset(cfg.vmPreset);
+  const presetGpuMode = vmPreset && typeof vmPreset.gpuMode === 'string' ? vmPreset.gpuMode : null;
+  const presetFrameFps = vmPreset && Number.isFinite(Number(vmPreset.frameFps)) ? Number(vmPreset.frameFps) : null;
   const vm = new AndroidVm({
     sdkRoot: cfg.sdkRoot || process.env.ANDROID_HOME || process.env.ANDROID_SDK_ROOT || undefined,
     adbPath: cfg.adbPath || undefined,
@@ -343,7 +371,7 @@ export function apply(ctx, config = {}) {
     apkRoots: Array.isArray(cfg.roots) ? cfg.roots : undefined,
     bootTimeoutMs: cfg.bootTimeoutMs || undefined,
     // Fast-boot strategy: host GPU + hypervisor detection + quick-boot snapshots.
-    gpuMode: cfg.gpuMode || undefined,
+    gpuMode: presetGpuMode || cfg.gpuMode || undefined,
     accel: cfg.accel || undefined,
     requireAccel: cfg.requireAccel !== false,
     quickBoot: cfg.quickBoot !== false,
@@ -365,6 +393,12 @@ export function apply(ctx, config = {}) {
           baseAvdName: cfg.avdName || 'dsh_apk',
           namesFile: defaultInstanceNamesPath(dataRoot),
           maxInstances: cfg.maxInstances || 3,
+          // Memory guard + optional lite hardware profile (see lib/memory.js).
+          vmPreset: cfg.vmPreset || 'standard',
+          memoryGuard: cfg.memoryGuard !== false,
+          hostReserveMb: cfg.hostReserveMb,
+          estimatedVmMb: cfg.estimatedVmMb,
+          memoryPressureReap: cfg.memoryPressureReap !== false,
           gpuMode: cfg.gpuMode || 'host',
           snapshotName: cfg.snapshotName || 'default_boot',
           scrcpyJarPath: SCRCPY_JAR,
@@ -388,6 +422,9 @@ export function apply(ctx, config = {}) {
   let disposeInstanceRoutes = null;
   const flowRecorder = new FlowRecorder();
   const cdpBridges = new Map();
+  // Lite mode: keep the default AVD small on memory-constrained hosts. Fire and
+  // forget — a missing AVD is normal before auto-setup runs.
+  void applyVmPresetToDefaultAvd();
   if (instanceManager) {
     instanceManager.onCreated = (id) => {
       registerInstanceRoutes?.(id);
@@ -418,7 +455,7 @@ export function apply(ctx, config = {}) {
   const frame = { buffer: null, at: 0, inFlight: null, receivedAt: [] };
   const screen = { value: null, at: 0 };
   const preferAutoStart = cfg.autoStart !== false;
-  let streamFps = Number.isFinite(Number(cfg.frameFps)) ? Math.min(10, Math.max(1, Math.round(Number(cfg.frameFps)))) : 2;
+  let streamFps = Number.isFinite(Number(presetFrameFps || cfg.frameFps)) ? Math.min(10, Math.max(1, Math.round(Number(presetFrameFps || cfg.frameFps)))) : 2;
 
   function measuredFrameFps() {
     const now = Date.now();
@@ -571,6 +608,52 @@ export function apply(ctx, config = {}) {
     }
   }
 
+  /**
+   * SDK download/install knobs shared by auto-setup and the manual panel steps.
+   * These map straight onto lib/setup.js options; unknown/empty values are left
+   * untouched so the defaults keep working.
+   */
+  function provisionNetworkOptions() {
+    const options = {};
+    if (Array.isArray(cfg.sdkManagerArgs) && cfg.sdkManagerArgs.length) options.sdkManagerArgs = cfg.sdkManagerArgs.map(String);
+    if (cfg.sdkManagerEnv && typeof cfg.sdkManagerEnv === 'object' && !Array.isArray(cfg.sdkManagerEnv)) options.sdkManagerEnv = cfg.sdkManagerEnv;
+    if (cfg.networkProxy && typeof cfg.networkProxy === 'object' && !Array.isArray(cfg.networkProxy)) options.networkProxy = cfg.networkProxy;
+    if (typeof cfg.commandLineToolsUrl === 'string' && cfg.commandLineToolsUrl) options.commandLineToolsUrl = cfg.commandLineToolsUrl;
+    if (typeof cfg.commandLineToolsSha256 === 'string' && cfg.commandLineToolsSha256) options.commandLineToolsSha256 = cfg.commandLineToolsSha256;
+    return options;
+  }
+
+  /**
+   * Lite mode patches the default AVD too (extra instances get the profile from
+   * InstanceManager). config.ini is plain text and is read at the next boot, so
+   * this is best-effort: a missing AVD just means setup has not created it yet.
+   */
+  async function applyVmPresetToDefaultAvd() {
+    try {
+      if (!vmPreset) return;
+      const ramSizeMb = Number(vmPreset.ramSizeMb);
+      const cores = Number(vmPreset.cores);
+      if (!Number.isFinite(ramSizeMb) && !Number.isFinite(cores)) return;
+      const avdHome = process.env.ANDROID_AVD_HOME || path.join(os.homedir(), '.android', 'avd');
+      const avd = String(cfg.avdName || 'dsh_apk');
+      const configPath = path.join(avdHome, `${avd}.avd`, 'config.ini');
+      if (!existsSync(configPath)) return;
+      let text = readFileSync(configPath, 'utf8');
+      if (!text.endsWith('\n')) text += '\n';
+      const setKey = (key, value) => {
+        const line = `${key}=${value}`;
+        const pattern = new RegExp(`^${key}=.*$`, 'm');
+        text = pattern.test(text) ? text.replace(pattern, line) : `${text}${line}\n`;
+      };
+      if (Number.isFinite(ramSizeMb) && ramSizeMb > 0) setKey('hw.ramSize', String(Math.round(ramSizeMb)));
+      if (Number.isFinite(cores) && cores > 0) setKey('hw.cpu.ncore', String(Math.round(cores)));
+      await fsp.writeFile(configPath, text, 'utf8');
+      vm._pushLog(`applied the ${vmPreset.name || 'custom'} VM preset to the default AVD ${avd}`);
+    } catch (error) {
+      vm._pushLog(`applying the VM preset to the default AVD failed: ${error && error.message ? error.message : error}`);
+    }
+  }
+
   function buildAutoSetup(enabled) {
     return createAutoSetup({
       enabled,
@@ -583,6 +666,12 @@ export function apply(ctx, config = {}) {
       jdkRoot: configuredJdkRoot,
       jdkMirror: cfg.jdkMirror,
       jdkVersion: cfg.jdkVersion,
+      // Download reliability knobs (lib/autosetup.js): retries with backoff,
+      // cumulative disk budget, and SDK-manager/network overrides.
+      stepRetries: cfg.setupRetries,
+      retryDelayMs: cfg.retryDelayMs,
+      minFreeDiskBytes: cfg.minFreeDiskBytes,
+      ...provisionNetworkOptions(),
       log: autoSetupLog,
       onUpdate: (snapshot) => {
         if (snapshot.state === lastAutoSetupState) return;
@@ -1564,6 +1653,9 @@ export function apply(ctx, config = {}) {
       stream: { fps: streamFps, hostFps: measuredFrameFps(), h264: scrcpyStatus() },
       origin: serverOrigin,
       multiInstance: Boolean(instanceManager),
+      // Host memory + effective instance cap + lite profile (lib/memory.js).
+      // Guarded so an older lib/instances.js never breaks the state route.
+      memory: instanceManager && typeof instanceManager.memory === 'function' ? instanceManager.memory() : null,
       client: lastClientReport,
       owner: instanceManager ? instanceManager.ownerInfo('default') : null,
       instances: [
@@ -2522,6 +2614,7 @@ export function apply(ctx, config = {}) {
           jdkRoot: configuredJdkRoot,
           systemImage: cfg.systemImage || DEFAULT_SYSTEM_IMAGE,
           acceptLicenses: true,
+          ...provisionNetworkOptions(),
         });
         setupCache = null;
         sendJson(res, 200, { ok: result.ok === true, action, result });
@@ -2542,6 +2635,7 @@ export function apply(ctx, config = {}) {
           jdkRoot: configuredJdkRoot,
           packages,
           acceptLicenses: true,
+          ...provisionNetworkOptions(),
         });
         setupCache = null;
         sendJson(res, 200, { ok: result.ok === true, action, result });
@@ -2557,6 +2651,7 @@ export function apply(ctx, config = {}) {
           jdkRoot: configuredJdkRoot,
           packages: Array.isArray(body.packages) ? body.packages : undefined,
           acceptLicenses: true,
+          ...provisionNetworkOptions(),
         });
         setupCache = null;
         sendJson(res, 200, { ok: result.ok === true, action, result });
@@ -3734,7 +3829,15 @@ export function apply(ctx, config = {}) {
         for (const profile of profiles) {
           remotes.push(await collectRemoteInventory({ profile }));
         }
-        sendJson(res, 200, buildEmulatorInventory({ local, remotes }));
+        const inventory = buildEmulatorInventory({ local, remotes });
+        if (instanceManager && typeof instanceManager.memory === 'function') {
+          try {
+            inventory.memory = instanceManager.memory();
+          } catch {
+            inventory.memory = null;
+          }
+        }
+        sendJson(res, 200, inventory);
       } catch (error) {
         sendError(res, 500, error && error.message ? error.message : String(error));
       }

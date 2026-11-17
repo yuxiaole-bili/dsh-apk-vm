@@ -38,6 +38,7 @@ import {
   KNOWN_GOOD_JDK_RELEASES,
   adoptiumAssetUrl,
   defaultJdkRoot,
+  downloadDefault,
   ensureJdk,
   findManagedJdk,
   knownGoodJdkAsset,
@@ -1464,6 +1465,47 @@ await test('success and failure results are JSON-safe', async (root) => {
     download: async () => ({ ok: false, error: 'offline test: no network' }),
   });
   assertJsonSafe(failed);
+});
+
+// ---------------------------------------------------------------------------
+// Case 9: downloadDefault stall watchdog (no data for stallTimeoutMs)
+// ---------------------------------------------------------------------------
+
+await test('downloadDefault aborts a stalled download', async (root) => {
+  const destination = path.join(root, 'archive.zip');
+  const chunk = Buffer.from('partial-bytes', 'utf8');
+  // The watchdog timers are unref'd (they must not keep a plugin host alive),
+  // so keep this hermetic test's event loop explicitly alive.
+  const keepAlive = setInterval(() => {}, 50);
+  try {
+    let sawSignal = false;
+    const fetchImpl = async (url, init) => {
+      assert.equal(url, 'https://example.test/stalled.zip');
+      sawSignal = init && init.signal instanceof AbortSignal;
+      const body = new ReadableStream({
+        start(controller) {
+          // Deliver one chunk, then hang forever: a "stuck" network transfer.
+          controller.enqueue(new Uint8Array(chunk));
+        },
+      });
+      return { ok: true, status: 200, headers: { get: () => null }, body };
+    };
+    const startedAt = Date.now();
+    const result = await downloadDefault('https://example.test/stalled.zip', destination, {
+      stallTimeoutMs: 150,
+      timeoutMs: 5000,
+      fetchImpl,
+    });
+    const elapsed = Date.now() - startedAt;
+    assert.equal(sawSignal, true, 'downloadDefault must pass an AbortSignal');
+    assert.equal(result.ok, false);
+    assert.match(String(result.error), /stalled/i, `unexpected error: ${result.error}`);
+    assert.ok(elapsed < 3000, `stall watchdog took too long: ${elapsed} ms`);
+    // The partial bytes stay on disk so a retry can resume with a Range request.
+    assert.equal(existsSync(destination), true, 'partial download must be kept for the retry');
+  } finally {
+    clearInterval(keepAlive);
+  }
 });
 
 // ---------------------------------------------------------------------------

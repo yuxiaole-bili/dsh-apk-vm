@@ -13,8 +13,11 @@
  * jdkMirror passthrough/normalization, throttled JDK download progress in
  * `detail.progress` (and its suppression after cancel), the 3 GB disk-space
  * precheck for the JDK and system-image steps (plus best-effort behaviour when
- * statfs is unavailable), `<jdkRoot>/.lock` contention/stale-removal/release
- * semantics, and the host-architecture default system image.
+ * statfs is unavailable), the cumulative install-plan disk budget and its
+ * minFreeDiskBytes override, `<jdkRoot>/.lock` contention/stale-removal/release
+ * semantics, the transient-error retry loop (exponential backoff, retry status
+ * updates, permanent-error short-circuit, budget exhaustion, cancel during the
+ * backoff wait), and the host-architecture default system image.
  *
  *   cd apk-vm-preview
  *   node spike/autosetup-test.mjs
@@ -339,7 +342,14 @@ test('4. failure then retry: error preserved, finishedAt refreshed', async () =>
       return { ok: true };
     },
   });
-  const api = createAutoSetup({ enabled: true, deps: fx.deps, jdkRoot: path.join(root, 'jdk') });
+  // HTTP 503 is a transient error: pin retries to 1 so this case still tests
+  // the explicit failed-run → retry() flow instead of the internal retry loop.
+  const api = createAutoSetup({
+    enabled: true,
+    deps: fx.deps,
+    jdkRoot: path.join(root, 'jdk'),
+    stepRetries: 1,
+  });
 
   const first = await api.start('first-use');
   assert.equal(first.state, 'failed');
@@ -645,6 +655,9 @@ test('14. disk precheck fails the JDK step with an actionable error', async () =
     enabled: true,
     deps: fx.deps,
     jdkRoot,
+    // Disable the cumulative plan precheck (1 byte) so this case still tests the
+    // per-step JDK guard; the cumulative guard has its own case (25).
+    minFreeDiskBytes: 1,
     statfs: async () => ({ bsize: 4096, bavail: 10 }), // ~40 KB free
   });
 
@@ -666,6 +679,9 @@ test('15. disk precheck fails the image step before sdkmanager runs', async () =
     deps: fx.deps,
     sdkRoot: path.join(root, 'sdk'),
     statfs: async () => ({ bsize: 4096, bavail: 10 }),
+    // The cumulative plan precheck is disabled (1 byte) so this case still
+    // exercises the per-step 3 GB guard that fails before sdkmanager runs.
+    minFreeDiskBytes: 1,
   });
 
   const final = await api.start('first-use');
@@ -744,7 +760,9 @@ test('19. the JDK lock is released after a failed step and on retry', async () =
       return { ok: true };
     },
   });
-  const api = createAutoSetup({ enabled: true, deps: fx.deps, jdkRoot });
+  // HTTP 503 is transient: disable the internal retry loop so retry() still
+  // exercises the released-lock → second run path.
+  const api = createAutoSetup({ enabled: true, deps: fx.deps, jdkRoot, stepRetries: 1 });
 
   const first = await api.start('first-use');
   assert.equal(first.state, 'failed');
@@ -767,6 +785,223 @@ test('20. the default system image follows the host CPU arch', async () => {
   const final = await api.start('first-use');
   assert.equal(final.state, 'ready');
   assert.equal(fx.detectOptions[0].systemImage, DEFAULT_IMAGE, 'detection must use the host-matching image');
+});
+
+test('21. a transient step failure is retried automatically', async () => {
+  const root = tempRoot();
+  let imageAttempts = 0;
+  const fx = makeFixture(MISSING_ALL, {
+    installSystemImage: ({ flags }) => {
+      imageAttempts += 1;
+      if (imageAttempts === 1) return { ok: false, error: 'image download failed: HTTP 503' };
+      flags.image = true;
+      return { ok: true };
+    },
+  });
+  const delays = [];
+  const updates = [];
+  const api = createAutoSetup({
+    enabled: true,
+    deps: fx.deps,
+    jdkRoot: path.join(root, 'jdk'),
+    stepRetries: 3,
+    retryDelayMs: 1000,
+    sleep: async (ms) => {
+      delays.push(ms);
+    },
+    onUpdate: (status) => updates.push(status),
+  });
+
+  const final = await api.start('first-use');
+
+  assert.equal(final.state, 'ready');
+  assert.equal(final.error, null);
+  assert.equal(fx.calls.image, 2, 'the image step runs twice: failed attempt + retry');
+  assert.deepEqual(fx.order.filter((id) => id === 'image'), ['image', 'image']);
+  assert.ok(fx.calls.detect >= 6, 'the chain keeps re-detecting after the successful retry');
+
+  const retryUpdate = updates.find((status) => status.detail && status.detail.attempt === 2);
+  assert.ok(retryUpdate, 'a retry status update must be published');
+  assert.equal(retryUpdate.state, 'running');
+  assert.equal(retryUpdate.stepId, 'image');
+  assert.match(retryUpdate.message, /retry 2\/3 in 1s: image download failed: HTTP 503/);
+  assert.equal(retryUpdate.detail.maxAttempts, 3);
+  assert.equal(retryUpdate.detail.nextDelayMs, 1000);
+  assert.ok(delays.length >= 1, 'the backoff wait must go through the injected sleep');
+  assert.ok(
+    delays.every((ms) => ms > 0 && ms <= 250),
+    `the retry wait is sliced, saw ${delays.join(',')}`,
+  );
+  assertStatusShape(retryUpdate);
+  assertStatusShape(final);
+});
+
+test('22. a permanent step failure is not retried', async () => {
+  const root = tempRoot();
+  const fx = makeFixture(MISSING_ALL, {
+    bootstrapSdk: () => ({ ok: false, error: 'download checksum mismatch' }),
+  });
+  const delays = [];
+  const api = createAutoSetup({
+    enabled: true,
+    deps: fx.deps,
+    jdkRoot: path.join(root, 'jdk'),
+    stepRetries: 3,
+    retryDelayMs: 1000,
+    sleep: async (ms) => {
+      delays.push(ms);
+    },
+  });
+
+  const final = await api.start('first-use');
+
+  assert.equal(final.state, 'failed');
+  assert.match(final.error, /download checksum mismatch/);
+  assert.equal(fx.calls.bootstrap, 1, 'permanent errors are not retried');
+  assert.deepEqual(delays, [], 'no backoff wait for a permanent error');
+});
+
+test('23. transient failures exhaust the retry budget with the last error', async () => {
+  const root = tempRoot();
+  const fx = makeFixture(MISSING_ALL, {
+    installSystemImage: () => ({ ok: false, error: 'image download failed: HTTP 503' }),
+  });
+  const delays = [];
+  const api = createAutoSetup({
+    enabled: true,
+    deps: fx.deps,
+    jdkRoot: path.join(root, 'jdk'),
+    stepRetries: 3,
+    retryDelayMs: 1000,
+    sleep: async (ms) => {
+      delays.push(ms);
+    },
+  });
+
+  const final = await api.start('first-use');
+
+  assert.equal(final.state, 'failed');
+  assert.equal(fx.calls.image, 3, 'stepRetries=3 means three attempts in total');
+  assert.match(final.error, /image download failed: HTTP 503/);
+  assert.match(final.error, /still failing after 3 attempts/);
+  assert.match(final.error, /hint: check network\/proxy access/i);
+  // Attempt 1 waits 1000 ms, attempt 2 waits 2000 ms (exponential ×2).
+  const totalWait = delays.reduce((sum, ms) => sum + ms, 0);
+  assert.equal(totalWait, 3000, `exponential backoff must wait 1 s then 2 s, saw ${delays.join(',')}`);
+});
+
+test('24. cancel interrupts the retry backoff wait', async () => {
+  const root = tempRoot();
+  let api;
+  const fx = makeFixture(MISSING_ALL, {
+    installSystemImage: () => ({ ok: false, error: 'image download failed: HTTP 503' }),
+  });
+  api = createAutoSetup({
+    enabled: true,
+    deps: fx.deps,
+    jdkRoot: path.join(root, 'jdk'),
+    stepRetries: 5,
+    retryDelayMs: 2000,
+    sleep: async () => {
+      api.cancel();
+    },
+  });
+
+  const final = await api.start('first-use');
+
+  assert.equal(final.state, 'cancelled');
+  assert.equal(final.finishedAt !== null, true);
+  assert.equal(fx.calls.image, 1, 'no further attempt after the cancel during the wait');
+  assert.equal(fx.calls.avd, 0);
+});
+
+test('25. the cumulative disk precheck fails before any step runs', async () => {
+  const root = tempRoot();
+  const fx = makeFixture(MISSING_ALL);
+  const api = createAutoSetup({
+    enabled: true,
+    deps: fx.deps,
+    jdkRoot: path.join(root, 'jdk'),
+    sdkRoot: path.join(root, 'sdk'),
+    statfs: async () => ({ bsize: 4096, bavail: 10 }), // ~40 KB free
+  });
+
+  const final = await api.start('first-use');
+
+  assert.equal(final.state, 'failed');
+  assert.match(final.error, /not enough free disk space to provision the Android VM environment/);
+  assert.match(final.error, /free up disk space and retry/);
+  assert.deepEqual(fx.calls, { detect: 1, jdk: 0, bootstrap: 0, tools: 0, image: 0, avd: 0 });
+
+  // Zero-config runs have no sdkRoot: the fallback target is the home directory,
+  // so the cumulative guard still protects a first run.
+  const fxHome = makeFixture(MISSING_ALL);
+  const homeApi = createAutoSetup({
+    enabled: true,
+    deps: fxHome.deps,
+    jdkRoot: path.join(root, 'jdk-home'),
+    home: path.join(root, 'home'),
+    statfs: async () => ({ bsize: 4096, bavail: 10 }),
+  });
+  const homeFinal = await homeApi.start('first-use');
+  assert.equal(homeFinal.state, 'failed');
+  assert.match(homeFinal.error, /not enough free disk space to provision the Android VM environment/);
+  assert.equal(fxHome.calls.jdk, 0, 'the zero-config plan fails before the JDK download');
+});
+
+test('26. minFreeDiskBytes overrides the plan budget but not the per-step check', async () => {
+  const root = tempRoot();
+  const fx = makeFixture(MISSING_ALL);
+  const api = createAutoSetup({
+    enabled: true,
+    deps: fx.deps,
+    jdkRoot: path.join(root, 'jdk'),
+    sdkRoot: path.join(root, 'sdk'),
+    minFreeDiskBytes: 1,
+    statfs: async () => ({ bsize: 4096, bavail: 10 }),
+  });
+
+  const final = await api.start('first-use');
+
+  assert.equal(final.state, 'failed');
+  assert.match(final.error, /not enough free disk space for the JDK download/);
+  assert.match(final.error, /at least 3\.0 GB is required/);
+  assert.equal(fx.calls.jdk, 0, 'the JDK download must not start');
+  assert.equal(fx.calls.bootstrap, 0);
+});
+
+test('27. sdkmanager options are passed through to the SDK steps only', async () => {
+  const root = tempRoot();
+  const fx = makeFixture(MISSING_ALL);
+  const networkProxy = { host: 'proxy.local', port: 3128 };
+  const sdkManagerArgs = ['--channel=0'];
+  const sdkManagerEnv = { HTTPS_PROXY: 'http://proxy.local:3128' };
+  const commandLineToolsUrl = 'https://example.test/commandlinetools-custom.zip';
+  const api = createAutoSetup({
+    enabled: true,
+    deps: fx.deps,
+    jdkRoot: path.join(root, 'jdk'),
+    networkProxy,
+    sdkManagerArgs,
+    sdkManagerEnv,
+    commandLineToolsUrl,
+  });
+
+  const final = await api.start('first-use');
+
+  assert.equal(final.state, 'ready');
+  assert.equal(fx.seen.bootstrap.commandLineToolsUrl, commandLineToolsUrl);
+  for (const id of ['bootstrap', 'tools', 'image']) {
+    assert.deepEqual(fx.seen[id].networkProxy, networkProxy, `${id} receives networkProxy`);
+    assert.deepEqual(fx.seen[id].sdkManagerArgs, sdkManagerArgs, `${id} receives sdkManagerArgs`);
+    assert.deepEqual(fx.seen[id].sdkManagerEnv, sdkManagerEnv, `${id} receives sdkManagerEnv`);
+  }
+  assert.ok(!('commandLineToolsUrl' in fx.seen.tools), 'only bootstrap uses commandLineToolsUrl');
+  assert.ok(!('commandLineToolsUrl' in fx.seen.image), 'only bootstrap uses commandLineToolsUrl');
+  assert.ok(!('networkProxy' in fx.seen.jdk), 'the JDK step has no sdkmanager options');
+  assert.ok(!('sdkManagerArgs' in fx.seen.jdk));
+  assert.ok(!('networkProxy' in fx.seen.avd), 'the AVD step has no sdkmanager options');
+  assert.ok(!('commandLineToolsUrl' in fx.seen.avd));
 });
 
 // ---------------------------------------------------------------------------

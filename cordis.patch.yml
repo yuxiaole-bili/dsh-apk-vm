@@ -45,6 +45,21 @@
         # quick reuse. start()/the next Agent action boots it again.
         instanceIdleMs: 900000
         instanceReapIntervalMs: 60000
+        # Host memory guard: refuse to start another local VM when the machine is
+        # low on memory, and cap the effective instance count from total RAM.
+        # A local emulator costs ~2-3 GB (AVD 1.5 GB + qemu/GPU overhead), so
+        # with 4 GB reserved for the host this allows 2 VMs on 16 GB and 1 on
+        # 8 GB (clamped to 1..8). Remote sessions do not count.
+        memoryGuard: true
+        # hostReserveMb: 4096
+        # estimatedVmMb: 3072
+        # Lite mode: smaller AVD hardware profile for memory-constrained hosts
+        # (1 GB guest RAM, 2 vCPU, SwiftShader GPU, 1 fps PNG / 720p30 H.264).
+        # Applies to the default AVD and to extra instances. standard | lite.
+        vmPreset: standard
+        # When memory is tight, stop the least recently used idle local VM
+        # before creating another one (extra VMs are stopped, never destroyed).
+        memoryPressureReap: true
         # H.264 stream: up to 60 fps via the vendored scrcpy server; 960 keeps
         # 540x960 video (plenty for the panel) so software WebCodecs decode can
         # sustain ~60 fps.
@@ -77,6 +92,29 @@
         # Manual (user-triggered only) system-image download from the
         # Environment card; autoSetup does not need this flag.
         allowSetupDownloads: false
+        # Download reliability for the zero-config first run: every provisioning
+        # step retries transient network failures with exponential backoff
+        # (setupRetries, retryDelayMs), no-data stalls are detected by a 45 s
+        # no-progress watchdog on the JDK/command-line-tools downloads, and the
+        # cumulative free-disk budget is checked before provisioning starts.
+        setupRetries: 3
+        retryDelayMs: 2000
+        # minFreeDiskBytes: 6442450944
+        # Optional mirrors/proxies for the Android SDK command-line tools and
+        # sdkmanager (the JDK already has jdkMirror). sdkManagerArgs are passed
+        # verbatim to sdkmanager; networkProxy becomes --proxy_* flags and is
+        # used only by sdkmanager, never by the plugin itself. commandLineToolsUrl
+        # overrides the Google command-line-tools archive.
+        # commandLineToolsUrl: 'https://example.com/commandlinetools-win-latest.zip'
+        # commandLineToolsSha256: '...'
+        # sdkManagerArgs: ['--no_https']
+        # sdkManagerEnv:
+        #   SDK_TEST_BASE_URL: 'https://mirror.example.com/android/repository/'
+        # networkProxy:
+        #   host: 127.0.0.1
+        #   port: 7890
+        #   user: ''
+        #   password: ''
         # The VM routes accept root shell/debug actions, so they reject
         # non-loopback clients by default even if the DSH web UI is exposed to
         # the LAN. Set true only behind your own authenticated reverse proxy.

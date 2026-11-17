@@ -142,6 +142,26 @@ by another conversation returns `vm-busy` unless you force a takeover (`ownerFor
 - Each instance has its own WebSocket (`/apk-vm/instances/<id>/ws`), unless the panel falls back
   to PNG frames.
 
+## Host memory, Lite mode and instance caps
+
+A local emulator costs roughly 2–3 GB of host RAM. With `memoryGuard` on (the default) the
+effective `maxInstances` is derived from total host RAM (`hostReserveMb` 4 GB reserve,
+`estimatedVmMb` 3 GB per VM): **8 GB → 1 VM, 16 GB → 3 with the default requested cap,
+32 GB+ → 3**. A 16 GB desktop that also runs an IDE and a browser is happier with
+`maxInstances: 2`, or with `vmPreset: lite` (1 GB guest RAM / 2 vCPU / SwiftShader / 720p30),
+which can fit a third VM.
+
+- `create_instance` / local starts can fail with a `host memory guard` error: stop an idle
+  instance, lower `maxInstances`, or pass `memoryOverride: true` when you knowingly
+  over-commit.
+- `memoryPressureReap` (on by default) stops the least-recently-used idle local VM when free
+  host memory is low; extra VMs are only stopped, never destroyed.
+- `list_instances`, `GET /apk-vm/state` and `/apk-vm/emulators` expose the same `memory`
+  object: `effectiveMaxInstances`, `requestedMaxInstances`, `limited`, `host.freeMb/totalMb`,
+  the active `profile` and `pressureReap`.
+- The guard estimates from host totals: an emulator started outside the plugin, and remote
+  sessions, are not counted. Use Lite mode on 8–16 GB hosts when running several agents.
+
 ## VM names and per-conversation selection
 
 - Every VM can have a human-friendly display name; ids stay stable (`default`, `frontend`,

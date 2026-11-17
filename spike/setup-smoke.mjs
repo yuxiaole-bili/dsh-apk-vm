@@ -22,18 +22,31 @@
  */
 
 import assert from 'node:assert/strict';
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { performance } from 'node:perf_hooks';
 import {
   DEFAULT_AVD_NAME,
   DEFAULT_SYSTEM_IMAGE,
+  bootstrapSdk,
   createAvd,
   detectEnvironment,
+  downloadFileDefault,
+  installSdkPackages,
   installSystemImage,
-  bootstrapSdk,
+  normalizeSdkManagerEnv,
+  sdkManagerProxyArgs,
   setupReport,
+  validateSdkManagerArgs,
 } from '../lib/setup.js';
 
 const IS_WIN = process.platform === 'win32';
@@ -217,6 +230,40 @@ function makeExec(overrides = {}) {
   };
   exec.calls = calls;
   return exec;
+}
+
+// ---------------------------------------------------------------------------
+// Fake fetch helpers (downloadFileDefault never touches the network here)
+// ---------------------------------------------------------------------------
+
+/**
+ * Response-like object for an injected fetch. The body is a real web
+ * ReadableStream so `Readable.fromWeb` behaves exactly like a live response.
+ * `hang: true` delivers the chunks and then never closes the stream (stall).
+ */
+function streamResponse(chunks, overrides = {}) {
+  const body = new ReadableStream({
+    start(controller) {
+      for (const chunk of chunks) controller.enqueue(new Uint8Array(Buffer.from(chunk, 'utf8')));
+      if (overrides.hang !== true) controller.close();
+    },
+  });
+  const headers = overrides.headers || {};
+  return {
+    ok: overrides.ok === undefined ? true : overrides.ok,
+    status: overrides.status === undefined ? 200 : overrides.status,
+    headers: {
+      get: (name) => {
+        const key = String(name).toLowerCase();
+        return Object.prototype.hasOwnProperty.call(headers, key) ? headers[key] : null;
+      },
+    },
+    body: overrides.body === undefined ? body : overrides.body,
+  };
+}
+
+function sha256Hex(text) {
+  return createHash('sha256').update(text).digest('hex');
 }
 
 // ---------------------------------------------------------------------------
@@ -799,6 +846,309 @@ async function main() {
     const installCall = installExec.calls[0];
     assert.ok(installCall.opts.env, 'installSystemImage hands an isolated child environment to the tool');
     assert.equal(installCall.opts.env.JAVA_HOME, javaHome);
+  });
+
+  // --- sdkmanager hardening helpers (networkProxy / extra argv / extra env) --
+  await check('sdkManagerProxyArgs translates networkProxy into sdkmanager argv', async () => {
+    assert.deepEqual(sdkManagerProxyArgs(undefined), []);
+    assert.deepEqual(sdkManagerProxyArgs(null), []);
+    assert.deepEqual(sdkManagerProxyArgs({ host: '127.0.0.1', port: 7890 }), [
+      '--proxy=http',
+      '--proxy_host=127.0.0.1',
+      '--proxy_port=7890',
+    ]);
+    assert.deepEqual(sdkManagerProxyArgs({ host: ' proxy.local ', port: 8080, user: 'alice', password: 's3cret' }), [
+      '--proxy=http',
+      '--proxy_host=proxy.local',
+      '--proxy_port=8080',
+      '--proxy_user=alice',
+      '--proxy_password=s3cret',
+    ]);
+    assert.throws(() => sdkManagerProxyArgs({ host: '', port: 1 }), /host must be a non-empty string/);
+    assert.throws(() => sdkManagerProxyArgs({ host: 'proxy local', port: 1 }), /whitespace/);
+    assert.throws(() => sdkManagerProxyArgs({ host: 'proxy', port: 0 }), /port/);
+    assert.throws(() => sdkManagerProxyArgs({ host: 'proxy', port: 70000 }), /port/);
+    assert.throws(() => sdkManagerProxyArgs({ host: 'proxy', port: 1, password: 'x' }), /requires .*user/);
+  });
+
+  await check('validateSdkManagerArgs rejects invalid argv entries', async () => {
+    assert.deepEqual(validateSdkManagerArgs(undefined), []);
+    const args = ['--no_https', '--channel=0'];
+    assert.deepEqual(validateSdkManagerArgs(args), args);
+    assert.throws(() => validateSdkManagerArgs('--no_https'), /must be an array/);
+    assert.throws(() => validateSdkManagerArgs(['']), /non-empty string/);
+    assert.throws(() => validateSdkManagerArgs([42]), /non-empty string/);
+    assert.throws(() => validateSdkManagerArgs(['--x\n--install']), /control characters/);
+    assert.throws(() => validateSdkManagerArgs(['--x\u0000']), /control characters/);
+    assert.throws(() => validateSdkManagerArgs(['a'.repeat(501)]), /too long/);
+  });
+
+  await check('normalizeSdkManagerEnv validates the child environment map', async () => {
+    assert.deepEqual(normalizeSdkManagerEnv(undefined), {});
+    assert.deepEqual(normalizeSdkManagerEnv({ HTTPS_PROXY: 'http://proxy:8080' }), {
+      HTTPS_PROXY: 'http://proxy:8080',
+    });
+    assert.throws(() => normalizeSdkManagerEnv(['x']), /plain object/);
+    assert.throws(() => normalizeSdkManagerEnv({ '1BAD': 'x' }), /invalid variable name/);
+    assert.throws(() => normalizeSdkManagerEnv({ FOO: 42 }), /must be a string/);
+    assert.throws(() => normalizeSdkManagerEnv({ FOO: 'a\nb' }), /control characters/);
+  });
+
+  // --- downloadFileDefault (fake fetch; no network) -------------------------
+  await check('downloadFileDefault resumes a partial file with a Range request (206 append)', async () => {
+    const root = tempRoot();
+    const destination = path.join(root, 'cmdline-tools.zip');
+    writeFileSync(destination, 'HEAD');
+    const calls = [];
+    const fetchImpl = async (url, init) => {
+      calls.push({ url, init });
+      return streamResponse(['TAIL'], { status: 206, headers: { 'content-length': '4' } });
+    };
+    const result = await downloadFileDefault('https://example.test/cmdline-tools.zip', destination, { fetchImpl });
+    assert.equal(result.ok, true);
+    assert.equal(result.resumed, true);
+    assert.equal(result.bytes, 8);
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].init.headers.range, 'bytes=4-');
+    assert.ok(calls[0].init.signal instanceof AbortSignal, 'download passes an AbortSignal');
+    assert.equal(readFileSync(destination, 'utf8'), 'HEADTAIL');
+  });
+
+  await check('downloadFileDefault restarts from byte 0 when the server ignores Range (200)', async () => {
+    const root = tempRoot();
+    const destination = path.join(root, 'cmdline-tools.zip');
+    writeFileSync(destination, 'OLD');
+    const fetchImpl = async () => streamResponse(['NEWDATA']);
+    const result = await downloadFileDefault('https://example.test/cmdline-tools.zip', destination, { fetchImpl });
+    assert.equal(result.ok, true);
+    assert.equal(result.resumed, false);
+    assert.equal(result.bytes, 7);
+    assert.equal(readFileSync(destination, 'utf8'), 'NEWDATA');
+  });
+
+  await check('downloadFileDefault deletes a stale partial file on HTTP 416', async () => {
+    const root = tempRoot();
+    const destination = path.join(root, 'cmdline-tools.zip');
+    writeFileSync(destination, 'STALE');
+    const fetchImpl = async () => streamResponse([], { ok: false, status: 416, body: null });
+    await assert.rejects(
+      downloadFileDefault('https://example.test/cmdline-tools.zip', destination, { fetchImpl }),
+      /stale partial file removed, retry/,
+    );
+    assert.equal(existsSync(destination), false, 'stale partial file must be removed');
+  });
+
+  await check('downloadFileDefault verifies expectedSha256 and deletes a mismatching file', async () => {
+    const root = tempRoot();
+    const destination = path.join(root, 'cmdline-tools.zip');
+    const fetchImpl = async () => streamResponse(['payload']);
+    await assert.rejects(
+      downloadFileDefault('https://example.test/cmdline-tools.zip', destination, {
+        fetchImpl,
+        expectedSha256: '0'.repeat(64),
+      }),
+      /download checksum mismatch/,
+    );
+    assert.equal(existsSync(destination), false, 'unverified archive must be removed');
+
+    const good = await downloadFileDefault('https://example.test/cmdline-tools.zip', destination, {
+      fetchImpl,
+      expectedSha256: sha256Hex('payload').toUpperCase(),
+    });
+    assert.equal(good.ok, true);
+    assert.equal(good.bytes, 7);
+  });
+
+  await check('downloadFileDefault rejects responses over maxBytes', async () => {
+    const root = tempRoot();
+    const destination = path.join(root, 'cmdline-tools.zip');
+    const fetchImpl = async () =>
+      streamResponse(['small'], { headers: { 'content-length': '4096' } });
+    await assert.rejects(
+      downloadFileDefault('https://example.test/cmdline-tools.zip', destination, { fetchImpl, maxBytes: 10 }),
+      /download too large: 4096 bytes/,
+    );
+  });
+
+  await check('downloadFileDefault aborts a stalled transfer with a stall watchdog', async () => {
+    const root = tempRoot();
+    const destination = path.join(root, 'cmdline-tools.zip');
+    // The watchdog timers are unref'd; keep this hermetic test's loop alive.
+    const keepAlive = setInterval(() => {}, 25);
+    try {
+      const fetchImpl = async () => streamResponse(['partial'], { hang: true });
+      const startedAt = Date.now();
+      await assert.rejects(
+        downloadFileDefault('https://example.test/cmdline-tools.zip', destination, {
+          fetchImpl,
+          stallTimeoutMs: 150,
+          timeoutMs: 5000,
+        }),
+        /download stalled: no data for 150 ms/,
+      );
+      assert.ok(Date.now() - startedAt < 3000, 'the stall watchdog must fire quickly');
+      assert.equal(existsSync(destination), true, 'partial download is kept for the retry');
+    } finally {
+      clearInterval(keepAlive);
+    }
+  });
+
+  await check('downloadFileDefault reports the total timeout', async () => {
+    const root = tempRoot();
+    const destination = path.join(root, 'cmdline-tools.zip');
+    const keepAlive = setInterval(() => {}, 25);
+    try {
+      // A fetch that never responds but honors the abort signal.
+      const fetchImpl = (url, init) =>
+        new Promise((resolve, reject) => {
+          init.signal.addEventListener('abort', () => reject(new Error('test fetch aborted')), { once: true });
+        });
+      await assert.rejects(
+        downloadFileDefault('https://example.test/cmdline-tools.zip', destination, {
+          fetchImpl,
+          timeoutMs: 120,
+          stallTimeoutMs: 60000,
+        }),
+        /download timed out after 120 ms/,
+      );
+    } finally {
+      clearInterval(keepAlive);
+    }
+  });
+
+  // --- sdkmanager argv/env pass-through -------------------------------------
+  await check('installSystemImage forwards networkProxy/sdkManagerArgs/sdkManagerEnv', async () => {
+    const root = tempRoot();
+    const sdk = makeSdk(root, { systemImage: false });
+    const env = isolatedEnv(root, makeAvdHome(root, { present: false }));
+    const exec = makeExec();
+    const proxyArgs = ['--proxy=http', '--proxy_host=192.0.2.10', '--proxy_port=8080'];
+    const result = await installSystemImage({
+      sdkRoot: sdk,
+      env,
+      exec,
+      networkProxy: { host: '192.0.2.10', port: 8080 },
+      sdkManagerArgs: ['--channel=0'],
+      sdkManagerEnv: { HTTPS_PROXY: 'http://192.0.2.10:8080' },
+    });
+    assert.equal(result.ok, true, result.error || '');
+    const call = exec.calls[0];
+    assert.deepEqual(call.args, [
+      `--sdk_root=${sdk}`,
+      ...proxyArgs,
+      '--channel=0',
+      '--install',
+      DEFAULT_SYSTEM_IMAGE,
+    ]);
+    assert.equal(call.opts.env.HTTPS_PROXY, 'http://192.0.2.10:8080');
+    assert.match(result.command, /--proxy_host=192\.0\.2\.10/);
+  });
+
+  await check('installSdkPackages forwards networkProxy/sdkManagerArgs/sdkManagerEnv', async () => {
+    const root = tempRoot();
+    const sdk = makeSdk(root, { systemImage: false });
+    const env = isolatedEnv(root, makeAvdHome(root, { present: false }));
+    const exec = makeExec();
+    const result = await installSdkPackages({
+      sdkRoot: sdk,
+      env,
+      exec,
+      packages: ['platform-tools'],
+      networkProxy: { host: '192.0.2.10', port: 8080, user: 'alice', password: 's3cret' },
+      sdkManagerArgs: ['--channel=0'],
+      sdkManagerEnv: { SDK_TEST_ENV: '1' },
+    });
+    assert.equal(result.ok, true, result.error || '');
+    assert.deepEqual(exec.calls[0].args, [
+      `--sdk_root=${sdk}`,
+      '--proxy=http',
+      '--proxy_host=192.0.2.10',
+      '--proxy_port=8080',
+      '--proxy_user=alice',
+      '--proxy_password=s3cret',
+      '--channel=0',
+      '--install',
+      'platform-tools',
+    ]);
+    assert.equal(exec.calls[0].opts.env.SDK_TEST_ENV, '1');
+  });
+
+  await check('installSdkPackages keeps the default argv unchanged without new options', async () => {
+    const root = tempRoot();
+    const sdk = makeSdk(root, { systemImage: false });
+    const env = isolatedEnv(root, makeAvdHome(root, { present: false }));
+    const exec = makeExec();
+    const result = await installSdkPackages({ sdkRoot: sdk, env, exec, packages: ['platform-tools'] });
+    assert.equal(result.ok, true, result.error || '');
+    assert.deepEqual(exec.calls[0].args, [`--sdk_root=${sdk}`, '--install', 'platform-tools']);
+    assert.deepEqual(exec.calls[0].opts.env, env, 'no new options → the same discovery env as before');
+  });
+
+  await check('bootstrapSdk forwards commandLineToolsUrl/Sha256 and proxy argv/env', async () => {
+    const root = tempRoot();
+    const sdk = path.join(root, 'fresh-sdk');
+    mkdirSync(sdk, { recursive: true });
+    const javaHome = path.join(root, 'jdk');
+    mkdirSync(path.join(javaHome, 'bin'), { recursive: true });
+    writeFileSync(path.join(javaHome, 'bin', IS_WIN ? 'java.exe' : 'java'), '');
+    const env = { ...isolatedEnv(root, makeAvdHome(root, { present: false })), JAVA_HOME: javaHome };
+    const calls = [];
+    const exec = async (file, args, opts) => {
+      calls.push({ file, args, opts });
+      return { code: 0, stdout: 'ok', stderr: '' };
+    };
+    const downloads = [];
+    const download = async (url, destination, opts = {}) => {
+      downloads.push({ url, destination, opts });
+      writeFileSync(destination, 'zip');
+      return { ok: true, bytes: 3 };
+    };
+    const extract = async (archive, destination) => {
+      const bin = path.join(destination, 'cmdline-tools', 'bin');
+      mkdirSync(bin, { recursive: true });
+      writeFileSync(path.join(bin, IS_WIN ? 'sdkmanager.bat' : 'sdkmanager'), '');
+      return { ok: true };
+    };
+    const proxyArgs = ['--proxy=http', '--proxy_host=proxy.local', '--proxy_port=3128'];
+    const result = await bootstrapSdk({
+      sdkRoot: sdk,
+      env,
+      exec,
+      download,
+      extract,
+      packages: ['platform-tools'],
+      commandLineToolsUrl: 'https://example.test/commandlinetools-custom.zip',
+      commandLineToolsSha256: sha256Hex('zip'),
+      networkProxy: { host: 'proxy.local', port: 3128 },
+      sdkManagerArgs: ['--channel=0'],
+      sdkManagerEnv: { HTTPS_PROXY: 'http://proxy.local:3128' },
+    });
+    assert.equal(result.ok, true, result.error || '');
+    assert.equal(downloads.length, 1);
+    assert.equal(downloads[0].url, 'https://example.test/commandlinetools-custom.zip');
+    assert.equal(downloads[0].opts.expectedSha256, sha256Hex('zip'));
+    const licenseCall = calls.find((entry) => entry.args.includes('--licenses'));
+    assert.ok(licenseCall, 'ran sdkmanager --licenses');
+    assert.deepEqual(licenseCall.args, [`--sdk_root=${sdk}`, ...proxyArgs, '--channel=0', '--licenses']);
+    assert.equal(licenseCall.opts.env.HTTPS_PROXY, 'http://proxy.local:3128');
+    const installCall = calls.find((entry) => entry.args.includes('--install'));
+    assert.deepEqual(installCall.args, [
+      `--sdk_root=${sdk}`,
+      ...proxyArgs,
+      '--channel=0',
+      '--install',
+      'platform-tools',
+    ]);
+    assert.equal(installCall.opts.env.HTTPS_PROXY, 'http://proxy.local:3128');
+    assert.match(result.command, /--proxy_host=proxy\.local/);
+  });
+
+  await check('new sdkmanager options are rejected as programmer errors', async () => {
+    await assert.rejects(bootstrapSdk({ sdkManagerArgs: ['bad\narg'] }), TypeError);
+    await assert.rejects(bootstrapSdk({ networkProxy: { host: 'x', port: 0 } }), TypeError);
+    await assert.rejects(bootstrapSdk({ commandLineToolsUrl: 'http://insecure.test/x.zip' }), /https URL/);
+    await assert.rejects(bootstrapSdk({ commandLineToolsSha256: 'not-a-hash' }), /SHA-256/);
+    await assert.rejects(installSystemImage({ sdkManagerEnv: { BAD: 1 } }), TypeError);
   });
 
   // --- setupReport ----------------------------------------------------------

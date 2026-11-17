@@ -30,7 +30,7 @@ window.__ModuleLoader__.load({
     var SWIPE_THRESHOLD_PX = 24;
     var FRAME_INTERVAL_MS = 500;
     var STATE_INTERVAL_MS = 2000;
-    var CLIENT_VERSION = '0.12.4';
+    var CLIENT_VERSION = '0.12.5';
 
     /* ------------------------------------------------------------------ *
      * Optional dsh-better-sidebar integration.
@@ -400,7 +400,14 @@ window.__ModuleLoader__.load({
       'grid.close': 'Close grid',
       'instances.stop': 'Stop',
       'instances.stopped': 'Stopped instance {id}',
+      'instances.start': 'Start',
+      'instances.started': 'Started instance {id}',
       'instances.idle': 'idle {seconds}s',
+      'instances.hostMemory': 'Host memory: {free} free of {total}',
+      'instances.cap': 'instance cap {effective}/{requested}',
+      'instances.lite': 'lite mode',
+      'instances.profileInfo': '{ram} MB RAM · {cores} CPU',
+      'setup.retrying': 'retry {attempt}/{max} in {seconds}s',
       'devices.title': 'Physical/remote adb device',
       'devices.select': 'Select device…',
       'devices.attach': 'Attach',
@@ -806,7 +813,14 @@ window.__ModuleLoader__.load({
       'grid.close': '关闭网格',
       'instances.stop': '停止',
       'instances.stopped': '已停止实例 {id}',
+      'instances.start': '启动',
+      'instances.started': '已启动实例 {id}',
       'instances.idle': '空闲 {seconds}s',
+      'instances.hostMemory': '主机内存：可用 {free} / 共 {total}',
+      'instances.cap': '实例上限 {effective}/{requested}',
+      'instances.lite': '轻量模式',
+      'instances.profileInfo': '{ram} MB 内存 · {cores} 核',
+      'setup.retrying': '重试 {attempt}/{max}，{seconds} 秒后',
       'devices.title': '物理/远程 adb 设备',
       'devices.select': '选择设备…',
       'devices.attach': '连接',
@@ -1193,6 +1207,8 @@ window.__ModuleLoader__.load({
         apk: apk,
         client: isObject(data.client) ? data.client : null,
         origin: typeof data.origin === 'string' && data.origin ? data.origin : '',
+        memory: isObject(data.memory) ? data.memory : null,
+        multiInstance: data.multiInstance === true,
       };
     }
 
@@ -2789,6 +2805,26 @@ window.__ModuleLoader__.load({
         var displayState = snapshot ? snapshot.vm.state : stateError ? 'error' : 'loading';
         var stateLabel = T('state.' + displayState);
         var ready = displayState === 'ready';
+        // Host memory / lite-mode profile reported by GET /apk-vm/state.
+        var memoryInfo = snapshot && isObject(snapshot.memory) ? snapshot.memory : null;
+        var memoryHost = memoryInfo && isObject(memoryInfo.host) ? memoryInfo.host : null;
+        var memoryProfile = memoryInfo && isObject(memoryInfo.profile) ? memoryInfo.profile : null;
+        var memoryEffective = memoryInfo && Number.isFinite(Number(memoryInfo.effectiveMaxInstances)) ? Math.max(1, Math.round(Number(memoryInfo.effectiveMaxInstances))) : null;
+        var memoryRequested = memoryInfo && Number.isFinite(Number(memoryInfo.requestedMaxInstances)) ? Math.max(1, Math.round(Number(memoryInfo.requestedMaxInstances))) : null;
+        var memoryFreeMb = memoryHost && Number.isFinite(Number(memoryHost.freeMb)) ? Math.max(0, Math.round(Number(memoryHost.freeMb))) : null;
+        var memoryTotalMb = memoryHost && Number.isFinite(Number(memoryHost.totalMb)) ? Math.max(0, Math.round(Number(memoryHost.totalMb))) : null;
+        var memoryLimited = Boolean(memoryInfo && memoryInfo.limited === true);
+        var memoryProfileName = memoryProfile && typeof memoryProfile.name === 'string' ? memoryProfile.name : '';
+        var formatMemoryMb = function (mb) {
+          if (mb === null) return 'n/a';
+          return mb >= 1024 ? (mb / 1024).toFixed(1) + ' GB' : mb + ' MB';
+        };
+        var memoryLineText = memoryFreeMb !== null && memoryTotalMb !== null
+          ? T('instances.hostMemory', { free: formatMemoryMb(memoryFreeMb), total: formatMemoryMb(memoryTotalMb) })
+          : '';
+        var memoryCapText = memoryEffective !== null
+          ? T('instances.cap', { effective: memoryEffective, requested: memoryRequested || memoryEffective })
+          : '';
         var targetFps =
           snapshot && isObject(snapshot.stream) && Number(snapshot.stream.fps) > 0
             ? Math.min(10, Math.max(1, Math.round(Number(snapshot.stream.fps))))
@@ -3547,6 +3583,25 @@ window.__ModuleLoader__.load({
               return;
             }
             pushToast('success', T('instances.stopped', { id: id }));
+            loadInstances();
+            loadState();
+          });
+        }
+
+        function startInstanceById(id) {
+          if (!id || id === 'default' || instanceBusy) return;
+          setInstanceBusy(true);
+          requestJson('/apk-vm/instances/' + encodeURIComponent(id) + '/vm', {
+            method: 'POST',
+            body: JSON.stringify({ action: 'start' }),
+          }, T).then(function (result) {
+            if (!mountedRef.current) return;
+            setInstanceBusy(false);
+            if (!result.ok) {
+              pushToast('error', (result.error || T('err.action')).slice(0, 400));
+              return;
+            }
+            pushToast('success', T('instances.started', { id: id }));
             loadInstances();
             loadState();
           });
@@ -4414,6 +4469,12 @@ window.__ModuleLoader__.load({
             ? ''
             : autoPercent.toFixed(0) + '%' +
               (autoReceived !== null && autoTotal !== null ? ' · ' + autoMb(autoReceived) + ' / ' + autoMb(autoTotal) : '');
+        var autoAttempt = autoDetail && Number.isFinite(Number(autoDetail.attempt)) ? Math.max(1, Math.round(Number(autoDetail.attempt))) : 1;
+        var autoMaxAttempts = autoDetail && Number.isFinite(Number(autoDetail.maxAttempts)) ? Math.max(autoAttempt, Math.round(Number(autoDetail.maxAttempts))) : 0;
+        var autoRetryDelayMs = autoDetail && Number.isFinite(Number(autoDetail.nextDelayMs)) ? Math.max(0, Math.round(Number(autoDetail.nextDelayMs))) : 0;
+        var autoRetryText = autoAttempt > 1
+          ? T('setup.retrying', { attempt: autoAttempt, max: autoMaxAttempts || autoAttempt, seconds: Math.max(1, Math.round(autoRetryDelayMs / 1000)) })
+          : '';
         var autoRunning = autoSetupStateName === 'running';
         var autoReadyKey = autoSetup && autoSetup.finishedAt ? 'ready:' + String(autoSetup.finishedAt) : 'ready';
 
@@ -5564,7 +5625,7 @@ window.__ModuleLoader__.load({
                   className: 'apkvm-dim',
                   style: { flex: '1 1 auto', minWidth: 0, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' },
                 },
-                autoProgressText + (autoMessage ? ' · ' + autoMessage : '') + (autoProgressSuffix ? ' · ' + autoProgressSuffix : '')
+                autoProgressText + (autoMessage ? ' · ' + autoMessage : '') + (autoProgressSuffix ? ' · ' + autoProgressSuffix : '') + (autoRetryText ? ' · ' + autoRetryText : '')
               ),
               actionBtn(T('setup.autoCancel'), {
                 key: 'auto-setup-cancel',
@@ -5945,12 +6006,23 @@ window.__ModuleLoader__.load({
                 'summary',
                 { className: 'apkvm-debug-summary' },
                 h('span', { className: 'apkvm-card-title' }, T('instances.manage')),
-                h('span', { className: 'apkvm-dim', style: { marginLeft: 'auto' } }, String(instancesList.length)),
+                h(
+                  'span',
+                  { className: 'apkvm-dim', style: { marginLeft: 'auto' }, title: [memoryLineText, memoryCapText, memoryProfileName === 'lite' ? T('instances.lite') : ''].filter(Boolean).join(' · ') },
+                  String(instancesList.length) + (memoryCapText ? ' · ' + memoryCapText : '')
+                ),
                 h('span', { className: 'apkvm-chevron', 'aria-hidden': 'true' }, '▸')
               ),
               h(
                 'div',
                 { className: 'apkvm-instlist' },
+                memoryLineText || memoryCapText || memoryProfileName === 'lite'
+                  ? h(
+                      'div',
+                      { className: 'apkvm-dim', style: { padding: '0 2px 2px', whiteSpace: 'normal', overflow: 'visible' } },
+                      [memoryLineText, memoryCapText, memoryProfileName === 'lite' ? T('instances.lite') : '', memoryLimited ? '⚠' : ''].filter(Boolean).join(' · ')
+                    )
+                  : null,
                 instancesList.map(function (entry) {
                   var isDefault = entry.id === 'default';
                   var ownerInfo = entry.ownerInfo && isObject(entry.ownerInfo) ? entry.ownerInfo : null;
@@ -5973,7 +6045,14 @@ window.__ModuleLoader__.load({
                     h(
                       'div',
                       { className: 'apkvm-instmeta' },
-                      idle !== null && !isDefault ? T('instances.idle', { seconds: idle }) : ''
+                      [
+                        Number(entry.ramSizeMb) > 0 || Number(entry.cores) > 0
+                          ? T('instances.profileInfo', { ram: Number(entry.ramSizeMb) || '?', cores: Number(entry.cores) || '?' })
+                          : isDefault && memoryProfile && (Number(memoryProfile.ramSizeMb) > 0 || Number(memoryProfile.cores) > 0)
+                            ? T('instances.profileInfo', { ram: Number(memoryProfile.ramSizeMb) || '?', cores: Number(memoryProfile.cores) || '?' })
+                            : '',
+                        idle !== null && !isDefault ? T('instances.idle', { seconds: idle }) : '',
+                      ].filter(Boolean).join(' · ')
                     ),
                     h(
                       'div',
@@ -5993,19 +6072,33 @@ window.__ModuleLoader__.load({
                       ),
                       isDefault
                         ? null
-                        : h(
-                            'button',
-                            {
-                              type: 'button',
-                              className: 'apkvm-mini',
-                              title: T('instances.stop'),
-                              onClick: function (event) {
-                                event.preventDefault();
-                                stopInstanceById(entry.id);
+                        : entry.state === 'ready' || entry.state === 'booting' || entry.state === 'starting'
+                          ? h(
+                              'button',
+                              {
+                                type: 'button',
+                                className: 'apkvm-mini',
+                                title: T('instances.stop'),
+                                onClick: function (event) {
+                                  event.preventDefault();
+                                  stopInstanceById(entry.id);
+                                },
                               },
-                            },
-                            T('instances.stop')
-                          ),
+                              T('instances.stop')
+                            )
+                          : h(
+                              'button',
+                              {
+                                type: 'button',
+                                className: 'apkvm-mini',
+                                title: T('instances.start'),
+                                onClick: function (event) {
+                                  event.preventDefault();
+                                  startInstanceById(entry.id);
+                                },
+                              },
+                              T('instances.start')
+                            ),
                       isDefault
                         ? null
                         : h(

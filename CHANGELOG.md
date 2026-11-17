@@ -1,5 +1,39 @@
 # Changelog
 
+## 0.12.5
+
+### Added
+
+- **Download reliability for zero-config provisioning.** Every provisioning step now retries
+  transient network/command failures (`setupRetries`, default 3, exponential backoff via
+  `retryDelayMs`), and a 45 s no-progress watchdog aborts stalled downloads instead of hanging.
+  The JDK archive resumes from a `.partial` file with HTTP Range and is re-verified against the
+  SHA-256 on every attempt; the command-line-tools download now streams with a stall timeout,
+  size bound and optional checksum (`commandLineToolsUrl` / `commandLineToolsSha256`) and can be
+  pointed at a mirror; `sdkmanager` accepts mirror/proxy settings (`sdkManagerArgs`,
+  `sdkManagerEnv`, `networkProxy`); a cumulative free-disk budget (`minFreeDiskBytes`, default
+  6 GB) is checked before provisioning starts. Retries surface `attempt` and `nextDelayMs` in
+  `autoSetup.detail`, and the Environment card shows "retry n/m in Ns" while backing off.
+- **Memory-aware instance management.** New `lib/memory.js` reads host RAM and derives the
+  effective instance cap (`memoryGuard`, `hostReserveMb` 4 GB, `estimatedVmMb` 3 GB, clamped to
+  1–8), exposed as `memory` on `GET /apk-vm/state`, `/apk-vm/emulators` and
+  `GET /apk-vm/instances`, and on the `apk_vm` `list_instances` action. Creating/starting a local
+  VM on a low-memory host fails with an actionable error instead of swapping the machine to
+  death; `memoryPressureReap` (default) stops the least-recently-used idle local VM first. The VM
+  instances card shows host RAM, the effective cap, the preset and the per-VM RAM/vCPU profile.
+- **Lite mode.** `vmPreset: lite` shrinks the default AVD and extra instances to 1 GB guest RAM,
+  2 vCPU, SwiftShader GPU and a 720×1280 / 30 fps H.264 stream (1 fps PNG fallback), for 8–16 GB
+  hosts.
+- **Wedged-guest recovery.** A device that adb still lists but whose guest shell stops responding
+  is detected after two consecutive boot-probe timeouts, killed through the emulator console (and
+  its process tree), its broken snapshot is quarantined, and the instance is cold-started once
+  instead of staying `booting` forever. `_refresh()` no longer flips between `starting` and
+  `stopped` while a boot wait is in flight, and the instances card gains a Start button for
+  stopped VMs.
+- **Chinese changelog.** `CHANGELOG.zh-CN.md` mirrors the 0.12.x entries of the English
+  changelog (the pre-0.12 history stays English-only in `CHANGELOG.md`) and release notes now
+  carry a Chinese summary; the release checklist requires keeping it in sync.
+
 ## 0.12.4
 
 ### Fixed

@@ -50,7 +50,11 @@ reporting, advertising or a remote backend.
   base. Every archive is verified against Adoptium's published SHA-256 checksum; the plugin sends
   no identifying headers, cookies or user data. It then runs the user's own `sdkmanager` for the
   Android SDK command-line tools, build-tools, platform and system image from the official Google
-  Android SDK repository. The plugin does not proxy or collect those downloads. Those downloads
+  Android SDK repository. The plugin does not proxy or collect those downloads. Optional
+  overrides (`jdkMirror`, `commandLineToolsUrl`/`commandLineToolsSha256`, `sdkManagerArgs`,
+  `sdkManagerEnv`, `networkProxy`) only redirect the plugin's own downloader and the
+  `sdkmanager` child process to a user-chosen mirror or proxy; proxy credentials passed this way
+  are used only for that child process and are never logged. Those downloads
   are size- and time-bounded and HTTPS-only, and can be disabled with `autoSetup: false` (the
   Environment card then offers the manual actions as before). No analytics, telemetry,
   advertising or remote backend is involved, and no third-party endpoint other than the ones
