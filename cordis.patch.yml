@@ -45,6 +45,24 @@
         # quick reuse. start()/the next Agent action boots it again.
         instanceIdleMs: 900000
         instanceReapIntervalMs: 60000
+        # Resident shared default VM: a lease can be released, but the VM and its
+        # AVD are never released or deleted. After sharedSuspendAfterMs idle the
+        # default VM suspends into its quick-boot snapshot (state "suspended",
+        # ~6 s to resume); after sharedStopAfterMs it is marked "stopped" (the
+        # snapshot and AVD are kept). Tool calls, panel actions and video clients
+        # reset the idle timer and a later start resumes it on demand.
+        sharedResident: true
+        sharedSuspendAfterMs: 300000
+        sharedStopAfterMs: 3600000
+        # Operation locks (lock_vm / panel Lock): a locked VM rejects other
+        # agents and users until the lock owner (or a local admin) unlocks it.
+        # lockEnforcement: all = hard lock for everyone; agents = only other
+        # agents are blocked, the local panel can still operate; off = locks are
+        # advisory markers only (never block).
+        lockEnforcement: all
+        # lockControl: all = agents or the panel may lock/unlock; user = only the
+        # panel/user can lock/unlock (tool lock_vm/unlock_vm return an error).
+        lockControl: all
         # Host memory guard: refuse to start another local VM when the machine is
         # low on memory, and cap the effective instance count from total RAM.
         # A local emulator costs ~2-3 GB (AVD 1.5 GB + qemu/GPU overhead), so

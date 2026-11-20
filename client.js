@@ -30,7 +30,7 @@ window.__ModuleLoader__.load({
     var SWIPE_THRESHOLD_PX = 24;
     var FRAME_INTERVAL_MS = 500;
     var STATE_INTERVAL_MS = 2000;
-    var CLIENT_VERSION = '0.12.5';
+    var CLIENT_VERSION = '0.13.0';
 
     /* ------------------------------------------------------------------ *
      * Optional dsh-better-sidebar integration.
@@ -110,6 +110,7 @@ window.__ModuleLoader__.load({
       'state.booting': 'Booting',
       'state.ready': 'Ready',
       'state.error': 'Error',
+      'state.suspended': 'Suspended',
       'pill.boot': 'boot {s}s',
       'pill.snapshot': 'quick {s}s',
       'pill.cold': 'cold {s}s',
@@ -126,6 +127,20 @@ window.__ModuleLoader__.load({
       'owner.busy': 'in use by {label}',
       'owner.scope': 'Scope',
       'owner.forceHint': 'Another owner holds this VM; release it first.',
+      'owner.reserved': 'Reserved by {label} until {time}',
+      'owner.takeover': 'Take over',
+      'owner.takeoverOk': 'Took over the VM',
+      'owner.takeoverHint': 'Another owner holds this VM. Take it over to control it; the change is recorded in the activity log.',
+      'owner.locked': 'Locked by {label} since {time}',
+      'owner.lock': 'Lock',
+      'owner.unlock': 'Unlock',
+      'owner.lockOk': 'VM locked for {label}',
+      'owner.unlockOk': 'VM unlocked',
+      'owner.lockHint': 'Locked: other agents and panel input are blocked until the lock owner (or a local admin) unlocks it.',
+      'owner.lockPanelHint': 'Locking blocks other agents and panel input until you unlock it.',
+      'owner.lockOff': 'Locks are disabled by configuration (lockEnforcement: off).',
+      'owner.lockAgentsOnly': 'Locks only block other agents; this panel can still operate (lockEnforcement: agents).',
+      'owner.lockUserOnly': 'Only the user can lock or unlock a VM (lockControl: user).',
       'owner.admin': 'Administrator — can operate every VM',
       'action.start': 'Start VM',
       'action.starting': 'Starting…',
@@ -306,6 +321,9 @@ window.__ModuleLoader__.load({
       'storage.cleanTemp': 'Clean temp',
       'storage.cleanSnapshots': 'Clean snapshots',
       'storage.cleanOrphans': 'Clean orphan AVDs',
+      'storage.cleanCorrupt': 'Clean corrupt snapshots',
+      'storage.cleanCrash': 'Clean crash dumps',
+      'storage.reclaimable': 'Reclaimable',
       'storage.confirm': 'Click again to confirm',
       'storage.freed': 'Freed {size}',
       'storage.avds': '{size} AVDs',
@@ -391,6 +409,7 @@ window.__ModuleLoader__.load({
       'instances.delete': 'Destroy VM',
       'instances.created': 'Created instance {id}',
       'instances.destroyed': 'Destroyed instance {id}',
+      'instances.confirmDestroy': 'Click Delete again to confirm destroying {id} (its AVD and data are deleted)',
       'instances.manage': 'VM instances',
       'instances.rename': 'Rename',
       'instances.renamePrompt': 'Display name for this VM',
@@ -523,6 +542,7 @@ window.__ModuleLoader__.load({
       'state.booting': '开机中',
       'state.ready': '已就绪',
       'state.error': '出错',
+      'state.suspended': '已挂起',
       'pill.boot': '启动用时 {s} 秒',
       'pill.snapshot': '快照启动 {s} 秒',
       'pill.cold': '冷启动 {s} 秒',
@@ -539,6 +559,20 @@ window.__ModuleLoader__.load({
       'owner.busy': '被 {label} 占用',
       'owner.scope': '范围',
       'owner.forceHint': '其他使用者正在占用，请先释放。',
+      'owner.reserved': '{label} 保留至 {time}',
+      'owner.takeover': '接管',
+      'owner.takeoverOk': '已接管虚拟机',
+      'owner.takeoverHint': '其他使用者正在占用此虚拟机；点击「接管」即可操作，变更会记录到活动日志。',
+      'owner.locked': '由 {label} 锁定（{time} 起）',
+      'owner.lock': '锁定',
+      'owner.unlock': '解锁',
+      'owner.lockOk': '已锁定虚拟机（{label}）',
+      'owner.unlockOk': '已解锁虚拟机',
+      'owner.lockHint': '已锁定：其他 Agent 与面板操作会被拒绝，直到锁所有者（或本地管理员）解锁。',
+      'owner.lockPanelHint': '锁定后其他 Agent 与面板操作都会被拒绝，直到解锁。',
+      'owner.lockOff': '配置已关闭操作锁（lockEnforcement: off）。',
+      'owner.lockAgentsOnly': '操作锁只阻止其他 Agent，本面板仍可操作（lockEnforcement: agents）。',
+      'owner.lockUserOnly': '只有用户可以加锁/解锁虚拟机（lockControl: user）。',
       'owner.admin': '管理员 · 可操作所有虚拟机',
       'action.start': '启动虚拟机',
       'action.starting': '正在启动…',
@@ -719,6 +753,9 @@ window.__ModuleLoader__.load({
       'storage.cleanTemp': '清理临时文件',
       'storage.cleanSnapshots': '清理快照',
       'storage.cleanOrphans': '清理孤立 AVD',
+      'storage.cleanCorrupt': '清理损坏快照',
+      'storage.cleanCrash': '清理崩溃转储',
+      'storage.reclaimable': '可回收',
       'storage.confirm': '再点一次确认',
       'storage.freed': '已释放 {size}',
       'storage.avds': '{size} 个 AVD',
@@ -804,6 +841,7 @@ window.__ModuleLoader__.load({
       'instances.delete': '销毁虚拟机',
       'instances.created': '已创建实例 {id}',
       'instances.destroyed': '已销毁实例 {id}',
+      'instances.confirmDestroy': '再次点击删除以确认销毁 {id}（该实例的 AVD 与数据会被删除）',
       'instances.manage': '虚拟机实例',
       'instances.rename': '重命名',
       'instances.renamePrompt': '为这台虚拟机设置显示名称',
@@ -1191,6 +1229,13 @@ window.__ModuleLoader__.load({
       }
 
       var bootMs = Number(vmRaw.bootMs);
+      var lockPolicy = { enforcement: 'all', control: 'all' };
+      if (isObject(data.lockPolicy)) {
+        var lockEnforcement = String(data.lockPolicy.enforcement || '');
+        var lockControl = String(data.lockPolicy.control || '');
+        if (lockEnforcement === 'agents' || lockEnforcement === 'off') lockPolicy.enforcement = lockEnforcement;
+        if (lockControl === 'user') lockPolicy.control = lockControl;
+      }
       return {
         vm: {
           state: state,
@@ -1209,6 +1254,7 @@ window.__ModuleLoader__.load({
         origin: typeof data.origin === 'string' && data.origin ? data.origin : '',
         memory: isObject(data.memory) ? data.memory : null,
         multiInstance: data.multiInstance === true,
+        lockPolicy: lockPolicy,
       };
     }
 
@@ -2586,6 +2632,9 @@ window.__ModuleLoader__.load({
         var instanceBusyState = React.useState(false);
         var instanceBusy = instanceBusyState[0];
         var setInstanceBusy = instanceBusyState[1];
+        var instanceConfirmState = React.useState('');
+        var instanceConfirm = instanceConfirmState[0];
+        var setInstanceConfirm = instanceConfirmState[1];
 
         var textInputState = React.useState('');
         var textInput = textInputState[0];
@@ -3439,6 +3488,16 @@ window.__ModuleLoader__.load({
           return Boolean(ownership && isObject(ownership.owner) && ownership.owner.key === panelOwnerKey());
         }
 
+        function formatOwnerTime(value) {
+          var stamp = Number(value);
+          if (!isFinite(stamp) || stamp <= 0) return '';
+          try {
+            return new Date(stamp).toLocaleString();
+          } catch (error) {
+            return '';
+          }
+        }
+
         function claimPanelOwner(force) {
           if (ownerBusy) return;
           var id = activeInstanceRef.current || 'default';
@@ -3461,8 +3520,66 @@ window.__ModuleLoader__.load({
               loadOwnership();
               return;
             }
-            pushToast('success', T('owner.claimOk'));
+            pushToast('success', force === true ? T('owner.takeoverOk') : T('owner.claimOk'));
             loadOwnership();
+            loadInstances();
+            loadState();
+          });
+        }
+
+        function lockPanelOwner() {
+          if (ownerBusy) return;
+          var id = activeInstanceRef.current || 'default';
+          setOwnerBusy(true);
+          requestJson('/apk-vm/ownership', {
+            method: 'POST',
+            body: JSON.stringify({
+              action: 'lock',
+              instanceId: id,
+              ownerKey: panelOwnerKey(),
+              ownerScope: panelScope,
+              ownerLabel: '桌面面板',
+            }),
+          }, T).then(function (result) {
+            if (!mountedRef.current) return;
+            setOwnerBusy(false);
+            if (!result.ok) {
+              pushToast('error', (result.error || T('err.action')).slice(0, 400));
+              loadOwnership();
+              return;
+            }
+            pushToast('success', T('owner.lockOk', { label: (result.owner && result.owner.label) || '桌面面板' }));
+            loadOwnership();
+            loadInstances();
+            loadState();
+          });
+        }
+
+        function unlockPanelOwner() {
+          if (ownerBusy) return;
+          var id = activeInstanceRef.current || 'default';
+          setOwnerBusy(true);
+          requestJson('/apk-vm/ownership', {
+            method: 'POST',
+            body: JSON.stringify({
+              action: 'unlock',
+              instanceId: id,
+              ownerKey: panelOwnerKey(),
+              ownerScope: panelScope,
+              ownerLabel: '桌面面板',
+              force: true,
+            }),
+          }, T).then(function (result) {
+            if (!mountedRef.current) return;
+            setOwnerBusy(false);
+            if (!result.ok) {
+              pushToast('error', (result.error || T('err.action')).slice(0, 400));
+              loadOwnership();
+              return;
+            }
+            pushToast('success', T('owner.unlockOk'));
+            loadOwnership();
+            loadInstances();
             loadState();
           });
         }
@@ -3636,8 +3753,14 @@ window.__ModuleLoader__.load({
 
         function destroyInstanceById(id) {
           if (!id || id === 'default' || instanceBusy) return;
+          if (instanceConfirm !== id) {
+            setInstanceConfirm(id);
+            pushToast('success', T('instances.confirmDestroy', { id: id }));
+            return;
+          }
+          setInstanceConfirm('');
           setInstanceBusy(true);
-          requestJson('/apk-vm/instances/' + encodeURIComponent(id), { method: 'DELETE' }, T).then(function (result) {
+          requestJson('/apk-vm/instances/' + encodeURIComponent(id) + '?confirm=1', { method: 'DELETE' }, T).then(function (result) {
             if (!mountedRef.current) return;
             setInstanceBusy(false);
             if (!result.ok) {
@@ -4265,7 +4388,11 @@ window.__ModuleLoader__.load({
 
         function cleanStorage(action) {
           if (storageBusy) return;
-          var destructive = action === 'snapshots' || action === 'orphan-avds';
+          var destructive =
+            action === 'snapshots' ||
+            action === 'orphan-avds' ||
+            action === 'corrupt-snapshots' ||
+            action === 'crash-dumps';
           if (destructive && storageConfirm !== action) {
             setStorageConfirm(action);
             pushToast('success', T('storage.confirm'));
@@ -4278,7 +4405,13 @@ window.__ModuleLoader__.load({
             payload.avdName = storageSnapshotAvd();
             payload.confirm = true;
           }
-          if (action === 'orphan-avds') payload.confirm = true;
+          if (
+            action === 'orphan-avds' ||
+            action === 'corrupt-snapshots' ||
+            action === 'crash-dumps'
+          ) {
+            payload.confirm = true;
+          }
           requestJson('/apk-vm/storage', { method: 'POST', body: JSON.stringify(payload) }, T).then(function (result) {
             if (!mountedRef.current) return;
             setStorageBusy('');
@@ -6124,6 +6257,14 @@ window.__ModuleLoader__.load({
         var currentOwner = ownership && isObject(ownership.owner) ? ownership.owner : null;
         var panelOwns = Boolean(currentOwner && currentOwner.key === panelOwnerKey());
         var ownerLabel = currentOwner ? String(currentOwner.label || currentOwner.key) : T('owner.none');
+        var ownerReservedUntil = currentOwner && Number(currentOwner.reservedUntil) > 0 ? Number(currentOwner.reservedUntil) : 0;
+        var ownerReservedText = ownerReservedUntil ? formatOwnerTime(ownerReservedUntil) : '';
+        var ownerLocked = Boolean(currentOwner && currentOwner.locked === true);
+        var ownerLockedAt = ownerLocked && Number(currentOwner.lockedAt) > 0 ? formatOwnerTime(Number(currentOwner.lockedAt)) : '';
+        var lockPolicy = snapshot && isObject(snapshot.lockPolicy) ? snapshot.lockPolicy : { enforcement: 'all', control: 'all' };
+        var lockDisabled = lockPolicy.enforcement === 'off';
+        var lockAgentsOnly = lockPolicy.enforcement === 'agents';
+        var lockUserOnly = lockPolicy.control === 'user';
         var ownerCard = h(
           'details',
           { className: 'apkvm-card apkvm-owner', open: true },
@@ -6146,6 +6287,19 @@ window.__ModuleLoader__.load({
                 ? h('span', { className: 'apkvm-dim' }, ' · ' + T('owner.busy', { label: ownerLabel }))
                 : null
             ),
+            ownerReservedText
+              ? h('div', { className: 'apkvm-dim' }, T('owner.reserved', { label: ownerLabel, time: ownerReservedText }))
+              : null,
+            ownerLocked
+              ? h('div', { className: 'apkvm-dim' }, T('owner.locked', { label: ownerLabel, time: ownerLockedAt || '' }))
+              : null,
+            lockDisabled
+              ? h('div', { className: 'apkvm-dim' }, T('owner.lockOff'))
+              : lockAgentsOnly
+                ? h('div', { className: 'apkvm-dim' }, T('owner.lockAgentsOnly'))
+                : lockUserOnly
+                  ? h('div', { className: 'apkvm-dim' }, T('owner.lockUserOnly'))
+                  : null,
             h(
               'div',
               { className: 'apkvm-ownercontrols' },
@@ -6166,12 +6320,62 @@ window.__ModuleLoader__.load({
                   T('owner.' + scope)
                 );
               }),
+              currentOwner && !panelOwns
+                ? h(
+                    'button',
+                    {
+                      key: 'takeover',
+                      type: 'button',
+                      className: 'apkvm-mini',
+                      disabled: ownerBusy,
+                      title: T('owner.takeoverHint'),
+                      onClick: function (event) {
+                        event.preventDefault();
+                        claimPanelOwner(true);
+                      },
+                    },
+                    T('owner.takeover')
+                  )
+                : null,
+              panelOwns && !ownerLocked && !lockDisabled
+                ? h(
+                    'button',
+                    {
+                      key: 'lock',
+                      type: 'button',
+                      className: 'apkvm-mini',
+                      disabled: ownerBusy,
+                      title: T('owner.lockPanelHint'),
+                      onClick: function (event) {
+                        event.preventDefault();
+                        lockPanelOwner();
+                      },
+                    },
+                    T('owner.lock')
+                  )
+                : null,
+              ownerLocked
+                ? h(
+                    'button',
+                    {
+                      key: 'unlock',
+                      type: 'button',
+                      className: 'apkvm-mini',
+                      disabled: ownerBusy,
+                      onClick: function (event) {
+                        event.preventDefault();
+                        unlockPanelOwner();
+                      },
+                    },
+                    T('owner.unlock')
+                  )
+                : null,
               h(
                 'button',
                 {
                   type: 'button',
                   className: 'apkvm-mini',
-                  disabled: ownerBusy || panelOwns,
+                  disabled: ownerBusy || panelOwns || Boolean(currentOwner),
                   onClick: function (event) {
                     event.preventDefault();
                     claimPanelOwner(false);
@@ -6194,7 +6398,7 @@ window.__ModuleLoader__.load({
               )
             ),
             currentOwner && !panelOwns
-              ? h('div', { className: 'apkvm-dim' }, T('owner.forceHint'))
+              ? h('div', { className: 'apkvm-dim' }, ownerLocked ? T('owner.lockHint') : T('owner.takeoverHint'))
               : null
           )
         );
@@ -7067,6 +7271,11 @@ window.__ModuleLoader__.load({
                     h('span', null, T('storage.snapshots') + ': ' + formatBytes((storage.totals && storage.totals.snapshotBytes) || 0)),
                     h('span', null, T('storage.sdk') + ': ' + formatBytes((storage.totals && storage.totals.sdkBytes) || 0)),
                     h('span', null, T('storage.temp') + ': ' + formatBytes((storage.totals && storage.totals.tempBytes) || 0)),
+                    h(
+                      'span',
+                      null,
+                      T('storage.reclaimable') + ': ' + formatBytes((storage.totals && storage.totals.reclaimableBytes) || 0)
+                    ),
                     storage.disk
                       ? h('span', null, T('storage.free') + ': ' + formatBytes(storage.disk.freeBytes))
                       : null
@@ -7129,6 +7338,40 @@ window.__ModuleLoader__.load({
                         },
                       }
                     ),
+                    storage.totals && storage.totals.corruptBytes
+                      ? actionBtn(
+                          storageConfirm === 'corrupt-snapshots'
+                            ? T('storage.confirm')
+                            : storageBusy === 'corrupt-snapshots'
+                              ? '…'
+                              : T('storage.cleanCorrupt'),
+                          {
+                            key: 'storage-corrupt',
+                            small: true,
+                            disabled: Boolean(storageBusy),
+                            onClick: function () {
+                              cleanStorage('corrupt-snapshots');
+                            },
+                          }
+                        )
+                      : null,
+                    storage.totals && storage.totals.crashBytes
+                      ? actionBtn(
+                          storageConfirm === 'crash-dumps'
+                            ? T('storage.confirm')
+                            : storageBusy === 'crash-dumps'
+                              ? '…'
+                              : T('storage.cleanCrash'),
+                          {
+                            key: 'storage-crash',
+                            small: true,
+                            disabled: Boolean(storageBusy),
+                            onClick: function () {
+                              cleanStorage('crash-dumps');
+                            },
+                          }
+                        )
+                      : null,
                     (storage.recommendations || []).some(function (item) {
                       return item.code === 'orphan-avds';
                     }) || (storage.avds || []).some(function (item) {

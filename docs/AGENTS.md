@@ -26,9 +26,11 @@ or `GET /apk-vm/guide`. The tool description also points here.
 
 ## Mental model
 
-- The VM is a **leased device**. Leases have a scope (`shared`, `conversation`, `project`).
-  A VM owned by another conversation returns a `vm-busy` error; `ownerForce: true` is an
-  explicit takeover and should only be used when the user asked for it.
+- The VM is a **leased device**. Leases have a scope (`shared`, `conversation`, `project`) and are
+  persisted to `<profile>/.apk-vm/leases.json`. A VM owned by another conversation returns a
+  `vm-busy` error (or `vm-takeover-required` for an admin panel action); `ownerForce: true`
+  (alias `force: true`) is an explicit takeover and should only be used when the user asked for
+  it. Dedicated (`conversation`/`project`) leases stay reserved for 24 h by default.
 - **Only `ready` VMs accept input.** `info` returns `state`, `root`, `serial`, `size`,
   `density`, `dpr` and `coordinateMap`.
 - `instance` selects the VM: omit it to use the calling agent's assignment (the first
@@ -74,7 +76,7 @@ or `GET /apk-vm/guide`. The tool description also points here.
   (`overlay: true` draws UIAutomator boxes), `record`, `perf`, `rotate`
 - **Instances & leases:** `list_instances`, `create_instance`, `rename_instance`, `destroy_instance`,
   `owner_status`, `claim_vm`, `release_vm`, `ownerScope` (`shared|conversation|project`),
-  `ownerForce`
+  `ownerForce` (alias `force`)
 - **Network / environment:** `network`, `proxy`, `env_snapshot`, `env_restore`, `install_ca`
 - **Flows and skills:** `flow_*` (record/replay a journey), `skill_*` (persisted app-operation
   skills with a Control Codebook), `control_*` (semantic-code tap/input, more layout-stable
@@ -116,10 +118,13 @@ call. `action=guide` is always available and never touches a VM.
 
 ## Shared vs dedicated VMs
 
-The default instance is a **shared** device: every conversation may use it, it is
-short-lived, and entering it from a different conversation resets the guest to the home
-screen (so you never inherit someone else's foreground app). Use it for one-off inspection
-and short automations.
+The default instance is a **shared, resident** device: every conversation may use it, and it is
+never released or deleted. When idle for `sharedSuspendAfterMs` (5 min) it suspends into its
+quick-boot snapshot (state `suspended`; a start resumes it in ~6 s); after `sharedStopAfterMs`
+(1 h) suspended it is marked `stopped`. The AVD and snapshot are kept. Any `apk_vm` call, panel
+action or video client resets the idle timer, and a later start resumes it on demand.
+Entering it from a different conversation resets the guest to the home screen (so you never
+inherit someone else's foreground app). Use it for one-off inspection and short automations.
 
 If this conversation needs a long-lived debugging device — logins, installed apps, stable
 state — claim a dedicated VM instead of holding the shared one:
@@ -130,7 +135,22 @@ state — claim a dedicated VM instead of holding the shared one:
 - `owner_status` inspects leases; `release_vm` gives a VM back.
 
 Don't keep several agents on one shared VM. Leases are visible in the panel, and a VM owned
-by another conversation returns `vm-busy` unless you force a takeover (`ownerForce=true`).
+by another conversation returns `vm-busy` unless you force a takeover (`ownerForce=true`, alias
+`force=true`). Dedicated reservations survive plugin restarts; the panel needs an explicit takeover
+(`x-apk-vm-takeover: 1`) for a VM held by another owner.
+
+## VM operation locks
+
+`lock_vm` / `unlock_vm` (or `POST /apk-vm/ownership` actions `lock`/`unlock`) make the current
+owner's lease a hard lock. While locked, every mutating request from another agent or the panel
+is rejected with `409 vm-locked`; `ownerForce`/takeover cannot break it. The panel owner card
+shows the lock and offers Lock/Unlock; a local admin can force-unlock. A lock does not block
+read-only calls (`owner_status`, `list_instances`, `info`).
+
+The plugin configuration can relax this: `lockEnforcement: agents` blocks only other agents
+(the local panel can still operate a locked VM) and `off` makes locks advisory only;
+`lockControl: user` limits lock/unlock to the panel/user (`lock_vm`/`unlock_vm` return a
+`vm-lock-restricted` error).
 
 ## Instances and remote VMs
 
@@ -179,11 +199,21 @@ which can fit a third VM.
   readiness usually arrives within a couple of seconds.
 - Screenshot or device timeouts return structured error codes (for example
   `EDEVICE_UNRESPONSIVE`); if the guest is wedged, `stop` + `start` is the recovery.
-- `vm-busy`: inspect with `owner_status`; `release_vm` frees a lease, `claim_vm` with
-  `ownerForce: true` is an explicit takeover.
+- `vm-busy` / `vm-takeover-required`: inspect with `owner_status`; `release_vm` frees a lease,
+  `claim_vm` with `ownerForce: true` (alias `force: true`) is an explicit takeover. A reserved
+  lease stays reserved until `reservedUntil`, even across plugin restarts.
 - Failed calls are journaled too (`ok: false` with the error); read the activity log before
   retrying the same action.
+- Destructive actions need explicit confirmation: `destroy_instance` requires `confirm: true`,
+  and `clean_storage` requires `confirm: true` for `snapshots`, `orphan-avds`,
+  `corrupt-snapshots` and `crash-dumps`. Never set `confirm` before checking the instance name
+  and the reported reclaimable bytes.
+- An action that has to boot a VM now fails after about 120 s (explicit `start`: 180 s) with an
+  actionable error instead of blocking for the 20-minute boot timeout; inspect `state`/
+  `logTail`, stop a wedged VM, then retry.
 
+- `vm-locked`: the VM is hard-locked by its owner; `ownerForce`/takeover does not override a
+  lock. The lock owner can `unlock_vm`; the local panel offers Unlock (admin can force-unlock).
 ## Suggested agent instructions
 
 ```text

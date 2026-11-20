@@ -71,6 +71,7 @@ const ENTRY_KEYS = [
   'durationMs',
   'argsPreview',
   'shotId',
+  'owner',
 ];
 
 async function main() {
@@ -123,6 +124,7 @@ async function main() {
     eq(first.durationMs, null, 'durationMs defaults to null');
     eq(first.argsPreview, null, 'argsPreview defaults to null');
     eq(first.shotId, null, 'shotId defaults to null');
+    eq(first.owner, null, 'owner defaults to null');
     eq(third.ok, false, 'ok:false is kept');
     eq(third.error, 'boom', 'error text is kept');
 
@@ -152,6 +154,57 @@ async function main() {
     ok(stats.bytes > 0, 'stats bytes are positive');
     const rawJournal = await fsp.readFile(path.join(dir, 'activity.jsonl'));
     eq(stats.bytes, rawJournal.length, 'stats bytes match the journal size');
+  }
+
+  console.log('activity-log: owner attribution');
+  {
+    const dir = await tempDir();
+    const log = new ActivityLog({ rootDir: dir });
+    const objectEntry = await log.record({
+      action: 'tap',
+      source: 'tool',
+      instanceId: 'default',
+      summary: 'tap with owner',
+      owner: {
+        key: 'conversation:sess-1',
+        label: 'qa 会话',
+        scope: 'conversation',
+        role: 'user',
+        ignored: 'not stored',
+      },
+    });
+    same(
+      objectEntry.owner,
+      { key: 'conversation:sess-1', label: 'qa 会话', scope: 'conversation', role: 'user' },
+      'owner objects keep key/label/scope/role'
+    );
+    const stringEntry = await log.record({ action: 'shell', owner: 'project:D:/demo' });
+    same(stringEntry.owner, { key: 'project:D:/demo' }, 'string owners become { key }');
+    const emptyEntry = await log.record({ action: 'info', owner: { label: '   ' } });
+    eq(emptyEntry.owner, null, 'empty owners are dropped');
+    const invalidEntry = await log.record({ action: 'info', owner: 42 });
+    eq(invalidEntry.owner, null, 'non-string/non-object owners are dropped');
+
+    const fakeToken = ['sk', 'verysecret1234567890'].join('-');
+    const secretEntry = await log.record({
+      action: 'tap',
+      owner: { key: 'conversation:sess-2', label: 'token=' + fakeToken },
+    });
+    ok(!secretEntry.owner.label.includes('verysecret'), 'owner labels are redacted before storage');
+    ok(secretEntry.owner.label.includes('[redacted]'), 'redacted owner labels keep a marker');
+
+    const listed = await log.list();
+    same(listed.entries.map((entry) => entry.owner), [
+      { key: 'conversation:sess-2', label: 'token=[redacted]' },
+      null,
+      null,
+      { key: 'project:D:/demo' },
+      { key: 'conversation:sess-1', label: 'qa 会话', scope: 'conversation', role: 'user' },
+    ], 'list keeps owner attribution newest-first');
+    const fetched = await log.get(objectEntry.id);
+    eq(fetched.owner.key, 'conversation:sess-1', 'get returns the owner attribution');
+    const rawLines = await readJsonLines(dir);
+    ok(rawLines.every((line) => JSON.parse(line).owner !== undefined), 'persisted entries always carry an owner field');
   }
 
   console.log('activity-log: filters and cursor pagination');

@@ -1,5 +1,85 @@
 # Changelog
 
+## 0.13.0
+
+### Added
+
+- **Persistent VM leases and reserved dedicated VMs.** Leases are now persisted to
+  `<profile>/.apk-vm/leases.json` and restored when the plugin starts, so a dedicated
+  `conversation`/`project` VM stays reserved for its owner across DSH restarts instead of being
+  handed to the first session that asks. Dedicated leases carry a `reservedUntil` deadline
+  (`leaseReservationTtlMs`, default 24 hours); after it expires the VM can be claimed normally
+  again.
+- **Explicit and audited takeover.** A lease held by another owner now reports the owner short id
+  and reservation deadline in `409 vm-busy` / `409 vm-takeover-required` responses. The panel shows
+  the reservation, keeps a VM held by another owner read-only and offers a **Take over** button;
+  admin mutations that are not an explicit takeover are rejected with `vm-takeover-required`
+  (`x-apk-vm-takeover: 1`) instead of silently operating another owner's VM. Claim, release and
+  takeover transitions are recorded in the activity journal with the previous and incoming owner.
+- **`force` alias for `ownerForce`.** `apk_vm` accepts `force: true` as a synonym for
+  `ownerForce: true`, so the error text and the actual parameter no longer disagree;
+  `claim_vm`/`release_vm` report the previous owner on takeover.
+- **Owner attribution in the activity journal.** Activity entries record `owner`
+  (`key`, `label`, `scope`, `role`) — sanitized and redacted like every other field — so "who did
+  what" stays visible when several conversations and the panel drive the same machine.
+- **Resident shared default VM.** The default VM is never released or deleted. After
+  `sharedSuspendAfterMs` idle (default 5 minutes) it suspends into its quick-boot snapshot (state
+  `suspended`, about 6 seconds to resume) and after `sharedStopAfterMs` (default 1 hour) it is
+  marked `stopped` with the snapshot and AVD kept. Tool calls, panel actions and video clients
+  reset the idle timer and a later start resumes it on demand.
+- **Storage accounting for crash debris and orphan AVDs.** `GET /apk-vm/storage` now reports
+  quarantined `*.corrupt-*` snapshot backups, emulator crash dumps and a `reclaimableBytes`
+  total. `POST /apk-vm/storage` gained `corrupt-snapshots` and `crash-dumps` actions (both
+  require `confirm: true`), and the Storage card shows the reclaimable amount with cleanup
+  buttons.
+- **Confirmations for destructive actions.** `destroy_instance` now requires `confirm: true`,
+  and the panel asks for a second click, so neither an agent nor a mis-click can delete an
+  instance AVD and its data by accident. The instance DELETE route also rejects requests
+  without `?confirm=1`.
+- **VM operation locks.** `lock_vm` / `unlock_vm` (and `POST /apk-vm/ownership` actions
+  `lock`/`unlock`) turn the caller's lease into a hard lock: while locked, every mutating
+  request from another agent or the panel is rejected with `409 vm-locked`; `ownerForce` and
+  takeover do not break a lock, and only the lock owner (or a local admin unlock) can control
+  the VM. Locks are persisted in `leases.json` and the panel shows Lock/Unlock. Two configuration
+  keys tune the policy: `lockEnforcement` (`all` | `agents` | `off`) and `lockControl`
+  (`all` | `user`).
+
+### Changed
+
+- Panel claim/release no longer forces by default: `POST /apk-vm/ownership` only forces when the
+  request body sets `force: true`, and every owner change is journaled.
+- **Bounded tool waits.** An action that has to boot the VM fails after about 120 s (explicit
+  `start`: 180 s, override with `timeoutMs`) with an actionable error instead of blocking for the
+  1200 s boot timeout; the VM keeps booting, so a later call can observe it ready, and
+  `maybeAutoStart` skips a VM that is in a crash loop.
+
+### Fixed
+
+- A reserved lease could be silently taken over by another session or by the admin panel without
+  an explicit takeover request.
+- Leases lived only in memory and disappeared on plugin reload, which let dedicated VMs be
+  re-assigned after a DSH restart.
+- An explicit `claim_vm` could leave implicit tool calls on the previously assigned VM: claiming
+  the default VM now updates the session mapping for the conversation, project and shared scopes,
+  so the next call without an `instance` argument resolves to the VM that was just claimed.
+- The activity journal recorded the requested instance id (falling back to `default` when omitted)
+  instead of the VM that actually served the call, which hid such mismatches from the log.
+
+- A `ReferenceError: recordOwnershipAction is not defined` broke takeovers started from
+  `apk_vm` tool calls and the `/apk-vm/ownership` HTTP route (the journal helper was defined
+  inside the route mount scope). The helper now lives at plugin scope, so takeovers are
+  recorded again.
+- The Windows emulator can crash (status `0xC0000005`) while writing or shortly after writing a
+  quick-boot snapshot. Snapshot saves are tracked now: a `start` that arrives during a save
+  waits for it to finish, a crash that follows a save disables further quick-boot saving, and
+  the partially written snapshot is quarantined and the boot retried once as a cold boot.
+- An incomplete quick-boot snapshot (tiny `ram.bin` or a half-written `snapshot.pb`) is now
+  quarantined before launch and the plan uses `-no-snapshot-load` for a cold boot, so a broken
+  snapshot can no longer crash the emulator in a restart loop.
+- **Crash-loop breaker.** Three non-zero emulator exits within 15 minutes pause automatic
+  recovery/auto-start and disable snapshot saving, with the reason written to the state error
+  and logTail; inspect the emulator log/crash dump, then start the VM manually.
+
 ## 0.12.5
 
 ### Added

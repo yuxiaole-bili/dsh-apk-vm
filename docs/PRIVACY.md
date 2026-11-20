@@ -30,6 +30,12 @@ reporting, advertising or a remote backend.
   default) and can be cleared from the panel or with `POST /apk-vm/activity/clear`.
   Because entries can contain screen content and command arguments (typed text is recorded
   as a character count only), clear the journal before sharing the panel or its recordings.
+- **Persisted VM leases.** `<profile>/.apk-vm/leases.json` stores the owner key, scope, session id,
+  workspace, display label and dedicated-reservation deadline for VM leases so that a
+  `conversation`/`project` VM stays reserved across DSH restarts. It is written only for VM
+  ownership bookkeeping, stays on this host and contains no screen content; delete the file
+  (or release the lease) to clear it. Leases record the DSH session id and workspace path, which
+  may be visible to other local conversations if the panel or activity log is shared.
 - **Remembered installed apps.** `<profile>/.apk-vm/installed-apps.json` stores the APK path,
   package name, label, launch activity and instance for APKs installed through the plugin, and
   archived copies live under `<profile>/.apk-vm/apks` (newest 10). Both stay on this host and are

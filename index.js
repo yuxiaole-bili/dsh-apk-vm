@@ -25,8 +25,8 @@ import { fileURLToPath } from 'node:url';
 import { AndroidVm } from './lib/android.js';
 import { InstanceManager } from './lib/instances.js';
 import { defaultInstanceNamesPath } from './lib/instance-names.js';
-import { OWNER_SCOPE, normalizeScope } from './lib/vm-ownership.js';
-import { checkOwnerAccess, ownerFromHttp } from './lib/http-owner.js';
+import { OWNER_SCOPE, VmLeaseConflict, normalizeScope } from './lib/vm-ownership.js';
+import { TAKEOVER_HEADER, checkOwnerAccess, ownerFromHttp, takeoverFromHttp } from './lib/http-owner.js';
 import { ScrcpySession, annexbToAvcc, CONTROL_MESSAGE_TYPE } from './lib/scrcpy.js';
 import { detectEnvironment, createAvd, installSystemImage, installSdkPackages, bootstrapSdk, DEFAULT_SYSTEM_IMAGE } from './lib/setup.js';
 import { createAutoSetup } from './lib/autosetup.js';
@@ -38,7 +38,15 @@ import { FlowRecorder } from './lib/flows.js';
 import { normalizeCodebook, resolveControl, suggestFeatures } from './lib/control-codebook.js';
 import { attachNodeImageFeatures } from './lib/image-features.js';
 import { SkillStore, SkillRecorder, runSkill, normalizeSkill, skillSummary } from './lib/app-skills.js';
-import { collectStorage, cleanTempFiles, cleanSnapshots, cleanOrphanAvds, formatBytes } from './lib/storage.js';
+import {
+  collectStorage,
+  cleanTempFiles,
+  cleanSnapshots,
+  cleanOrphanAvds,
+  cleanCorruptSnapshots,
+  cleanCrashDumps,
+  formatBytes,
+} from './lib/storage.js';
 import { buildApksFromAab, aabInfo, detectBundletool } from './lib/aab.js';
 import { readHarFile, summarizeHar, filterHar, toCurl } from './lib/har.js';
 import { runAssertions, compareScreenshot, createTestReport, reportMarkdown } from './lib/ui-tests.js';
@@ -70,7 +78,7 @@ const SCRCPY_JAR = path.join(PLUGIN_DIR, 'lib', 'vendor', 'scrcpy-server-v5.0.1.
  */
 const AGENT_GUIDE_PATH = path.join(PLUGIN_DIR, 'docs', 'AGENTS.md');
 // Single source of truth for the tool action enum (schema + early validation).
-const TOOL_ACTIONS = Object.freeze(["info", "shell", "logcat", "getprop", "setprop", "packages", "install", "push", "pull", "reboot", "root", "force_stop", "clear_data", "uninstall", "rotate", "ui_dump", "inspect_ui", "proxy", "install_ca", "network", "record", "perf", "screenshot", "tap", "swipe", "long_press", "key", "text", "apk_info", "find_ui", "assert_text", "tap_text", "clipboard_get", "clipboard_set", "devices", "attach_device", "detach_device", "start", "stop", "list_instances", "create_instance", "rename_instance", "destroy_instance", "owner_status", "claim_vm", "release_vm", "flow_start", "flow_stop", "flow_list", "flow_replay", "storage", "clean_storage", "skill_list", "skill_get", "skill_save", "skill_delete", "skill_start", "skill_stop", "skill_cancel", "skill_run", "skill_codebook", "control_ui", "control_features", "control_codebook", "control_tap", "control_input", "control_long_press", "control_swipe", "control_assert", "control_wait", "control_launch", "webview", "tap_css", "tap_selector", "type_text", "wait_for", "env_snapshot", "env_restore", "adb", "guide"]);
+const TOOL_ACTIONS = Object.freeze(["info", "shell", "logcat", "getprop", "setprop", "packages", "install", "push", "pull", "reboot", "root", "force_stop", "clear_data", "uninstall", "rotate", "ui_dump", "inspect_ui", "proxy", "install_ca", "network", "record", "perf", "screenshot", "tap", "swipe", "long_press", "key", "text", "apk_info", "find_ui", "assert_text", "tap_text", "clipboard_get", "clipboard_set", "devices", "attach_device", "detach_device", "start", "stop", "list_instances", "create_instance", "rename_instance", "destroy_instance", "owner_status", "claim_vm", "release_vm", "lock_vm", "unlock_vm", "flow_start", "flow_stop", "flow_list", "flow_replay", "storage", "clean_storage", "skill_list", "skill_get", "skill_save", "skill_delete", "skill_start", "skill_stop", "skill_cancel", "skill_run", "skill_codebook", "control_ui", "control_features", "control_codebook", "control_tap", "control_input", "control_long_press", "control_swipe", "control_assert", "control_wait", "control_launch", "webview", "tap_css", "tap_selector", "type_text", "wait_for", "env_snapshot", "env_restore", "adb", "guide"]);
 
 
 let agentGuideCache;
@@ -357,6 +365,14 @@ export function apply(ctx, config = {}) {
   const vmPreset = normalizeVmPreset(cfg.vmPreset);
   const presetGpuMode = vmPreset && typeof vmPreset.gpuMode === 'string' ? vmPreset.gpuMode : null;
   const presetFrameFps = vmPreset && Number.isFinite(Number(vmPreset.frameFps)) ? Number(vmPreset.frameFps) : null;
+  // Operation-lock policy. enforcement: 'all' (default, hard block for every
+  // other client), 'agents' (other agents are blocked but the local panel can
+  // still operate), 'off' (locks are advisory and never block). control: 'all'
+  // (agents or the panel may lock/unlock) or 'user' (panel/user only).
+  const lockEnforcement = cfg.lockEnforcement === 'agents' || cfg.lockEnforcement === 'off'
+    ? cfg.lockEnforcement
+    : 'all';
+  const lockControl = cfg.lockControl === 'user' ? 'user' : 'all';
   const vm = new AndroidVm({
     sdkRoot: cfg.sdkRoot || process.env.ANDROID_HOME || process.env.ANDROID_SDK_ROOT || undefined,
     adbPath: cfg.adbPath || undefined,
@@ -400,6 +416,13 @@ export function apply(ctx, config = {}) {
           estimatedVmMb: cfg.estimatedVmMb,
           memoryPressureReap: cfg.memoryPressureReap !== false,
           gpuMode: cfg.gpuMode || 'host',
+          // Resident shared default VM: it is never released/deleted. After an
+          // idle period it suspends into a quick-boot snapshot, later it is
+          // marked stopped; any tool/panel/stream activity resumes it on demand.
+          defaultVm: vm,
+          sharedResident: cfg.sharedResident !== false,
+          sharedSuspendAfterMs: cfg.sharedSuspendAfterMs,
+          sharedStopAfterMs: cfg.sharedStopAfterMs,
           snapshotName: cfg.snapshotName || 'default_boot',
           scrcpyJarPath: SCRCPY_JAR,
           scrcpyMaxSize: cfg.scrcpyMaxSize || 960,
@@ -407,6 +430,9 @@ export function apply(ctx, config = {}) {
           scrcpyMaxFps: cfg.scrcpyMaxFps || 60,
           idleTimeoutMs: cfg.instanceIdleMs || 15 * 60 * 1000,
           leaseTtlMs: cfg.leaseTtlMs || 30 * 60 * 1000,
+          leaseReservationTtlMs: cfg.leaseReservationTtlMs || undefined,
+          // Dedicated (conversation/project) leases survive a plugin/DSH restart.
+          leasesFile: path.join(dataRoot, '.apk-vm', 'leases.json'),
           dnsServers: Array.isArray(cfg.dnsServers) ? cfg.dnsServers.map(String) : undefined,
           networkMode: cfg.networkMode || undefined,
           tcpdumpPath: cfg.tcpdumpPath || undefined,
@@ -978,6 +1004,7 @@ export function apply(ctx, config = {}) {
   function handleScrcpyClient(client) {
     const st = getScrcpyState();
     st.clients.add(client);
+    if (instanceManager) instanceManager.noteSharedActivity();
     sendScrcpyInit(st);
     if (st.initSent && st.session && st.session.state === 'running') {
       // A late client only has delta frames; ask the encoder for a fresh keyframe.
@@ -1580,6 +1607,7 @@ export function apply(ctx, config = {}) {
 
   function maybeAutoStart(status) {
     if (!preferAutoStart || autoStartKicked) return;
+    if (vm._crashLoop === true) return; // crash-loop breaker: require a manual start
     if (!status || status.state !== 'stopped') return;
     if (!vm.emulatorPath && !vm.serial) return; // nothing this plugin can start
     if (status.serial) return;
@@ -1656,6 +1684,10 @@ export function apply(ctx, config = {}) {
       // Host memory + effective instance cap + lite profile (lib/memory.js).
       // Guarded so an older lib/instances.js never breaks the state route.
       memory: instanceManager && typeof instanceManager.memory === 'function' ? instanceManager.memory() : null,
+      // Resident shared default VM policy state (suspended/stopped/idle timers).
+      shared: instanceManager && typeof instanceManager.sharedStatus === 'function' ? instanceManager.sharedStatus() : null,
+      // Operation-lock policy: 'all' | 'agents' | 'off' + lock control 'all' | 'user'.
+      lockPolicy: { enforcement: lockEnforcement, control: lockControl },
       client: lastClientReport,
       owner: instanceManager ? instanceManager.ownerInfo('default') : null,
       instances: [
@@ -1682,6 +1714,37 @@ export function apply(ctx, config = {}) {
       setup: { autoSetup: activeAutoSetup().status() },
       roots: rootsFor(),
     };
+  }
+
+  /** Journal an ownership transition (claim/release/takeover) with owner metadata. */
+  // Owned by the plugin scope (not a single HTTP route set): tool calls can
+  // journal takeovers too, so this must stay reachable from resolveToolApi.
+  function recordOwnershipAction(action, instanceId, owner, previous = null) {
+    try {
+      const descriptor = owner && typeof owner === 'object'
+        ? {
+            key: owner.key || null,
+            label: owner.label || null,
+            scope: owner.scope || null,
+            role: owner.role || null,
+          }
+        : null;
+      if (!descriptor || !descriptor.key) return;
+      const previousLabel = previous && (previous.label || previous.key)
+        ? String(previous.label || previous.key)
+        : null;
+      void activityLog.record({
+        action: 'ownership',
+        source: 'http',
+        tool: 'panel',
+        instanceId: String(instanceId || 'default'),
+        summary: `${action} ${instanceId}${previousLabel ? ` (was ${previousLabel})` : ''} -> ${descriptor.label || descriptor.key}`,
+        ok: true,
+        owner: descriptor,
+      });
+    } catch {
+      /* activity logging must never break ownership */
+    }
   }
 
   /** Android SDK root shared by the storage route and the apk_vm storage action. */
@@ -1781,15 +1844,34 @@ export function apply(ctx, config = {}) {
       if (!instanceManager) return true;
       const lease = instanceManager.ownerInfo(instanceId);
       const incoming = httpOwnerFromRequest(req);
-      const access = checkOwnerAccess(lease, incoming, instanceId);
+      const mutating = req.method !== 'GET' && req.method !== 'HEAD';
+      const takeover = takeoverFromHttp(req.headers || {}, requestQuery(req));
+      const access = checkOwnerAccess(lease, incoming, instanceId, { mutating, takeover, lockMode: lockEnforcement });
       if (!access.ok) {
         sendJson(res, access.status || 409, {
           ok: false,
           error: access.error,
           code: access.code || 'vm-busy',
           owner: access.owner || lease,
+          reserved: access.reserved === true,
+          reservedUntil: access.reservedUntil || null,
         });
         return false;
+      }
+      if (access.takeover) {
+        try {
+          const result = instanceManager.claimOwner(instanceId, incoming, { force: true });
+          recordOwnershipAction('takeover', instanceId, incoming, result.previous || lease);
+          return true;
+        } catch (error) {
+          sendJson(res, error.status === 409 ? 409 : 400, {
+            ok: false,
+            error: error.message,
+            code: error.code || null,
+            owner: error.owner || null,
+          });
+          return false;
+        }
       }
       if (access.autoClaim) {
         try {
@@ -1805,6 +1887,7 @@ export function apply(ctx, config = {}) {
         }
       }
       if (access.touch) instanceManager.touchOwner(instanceId, incoming.key);
+      if (mutating && instanceId === 'default') instanceManager.noteSharedActivity();
       return true;
     }
 
@@ -2073,6 +2156,22 @@ export function apply(ctx, config = {}) {
         if (ok && specSafe.shotAction) {
           shot = await captureActivityShotBound(specSafe);
         }
+        let owner = null;
+        try {
+          if (instanceManager) {
+            const incoming = httpOwnerFromRequest(req);
+            if (incoming) {
+              owner = {
+                key: incoming.key,
+                label: incoming.label,
+                scope: incoming.scope,
+                role: incoming.role,
+              };
+            }
+          }
+        } catch {
+          owner = null;
+        }
         await activityLog.record({
           action: String(specSafe.action || 'http').slice(0, 100),
           source: 'http',
@@ -2084,6 +2183,7 @@ export function apply(ctx, config = {}) {
           durationMs: Math.max(0, Date.now() - startedAt),
           argsPreview: specSafe.argsPreview || null,
           shot: shot || undefined,
+          owner: owner || undefined,
         });
       } catch {
         /* activity logging must never break a request */
@@ -2536,6 +2636,12 @@ export function apply(ctx, config = {}) {
         } else if (action === 'orphan-avds') {
           if (body.confirm !== true) throw new Error('orphan AVD cleanup requires confirm:true');
           result = await cleanOrphanAvds({ knownAvds: known(), activeAvds: active() });
+        } else if (action === 'corrupt-snapshots') {
+          if (body.confirm !== true) throw new Error('corrupt snapshot cleanup requires confirm:true');
+          result = await cleanCorruptSnapshots({ activeAvds: active() });
+        } else if (action === 'crash-dumps') {
+          if (body.confirm !== true) throw new Error('crash dump cleanup requires confirm:true');
+          result = await cleanCrashDumps();
         } else {
           throw new Error(`unsupported storage action: ${action || '(missing)'}`);
         }
@@ -2694,19 +2800,33 @@ export function apply(ctx, config = {}) {
         source: 'panel',
       });
       try {
-        const admin = owner.role === 'admin';
         if (action === 'claim') {
-          const result = instanceManager.claimOwner(instanceId, owner, { force: body.force === true || admin });
+          const result = instanceManager.claimOwner(instanceId, owner, { force: body.force === true });
+          recordOwnershipAction(result.previous ? 'takeover' : 'claim', instanceId, owner, result.previous || null);
           sendJson(res, 200, { ok: true, instanceId, ...result });
           return;
         }
         if (action === 'release') {
-          const released = instanceManager.releaseOwner(instanceId, owner, { force: body.force === true || admin });
+          const released = instanceManager.releaseOwner(instanceId, owner, { force: body.force === true });
+          recordOwnershipAction('release', instanceId, owner, released || null);
           sendJson(res, 200, { ok: true, instanceId, released });
           return;
         }
         if (action === 'touch') {
           sendJson(res, 200, { ok: true, owner: instanceManager.touchOwner(instanceId, owner.key) });
+          return;
+        }
+        if (action === 'lock') {
+          const locked = instanceManager.lockOwner(instanceId, owner, { force: false });
+          recordOwnershipAction('lock', instanceId, owner, locked);
+          sendJson(res, 200, { ok: true, instanceId, owner: locked });
+          return;
+        }
+        if (action === 'unlock') {
+          const admin = String((req.headers && req.headers['x-apk-vm-role']) || '') === 'admin' && isLoopbackRequest(req);
+          const unlocked = instanceManager.unlockOwner(instanceId, owner, { force: admin && body.force === true });
+          recordOwnershipAction('unlock', instanceId, owner, unlocked);
+          sendJson(res, 200, { ok: true, instanceId, owner: unlocked });
           return;
         }
         sendJson(res, 200, {
@@ -2869,6 +2989,11 @@ export function apply(ctx, config = {}) {
 
       if (!rest) {
         if (req.method === 'DELETE') {
+          const confirmed = url.searchParams.get('confirm') === '1' || url.searchParams.get('confirm') === 'true';
+          if (!confirmed) {
+            sendError(res, 400, `destroying instance ${id} requires ?confirm=1 (the instance AVD and its data are deleted)`);
+            return;
+          }
           await instanceManager.destroy(id);
           disposeInstanceRoutes?.(id);
           sendJson(res, 200, { ok: true, id, destroyed: true });
@@ -4680,6 +4805,7 @@ export function apply(ctx, config = {}) {
       const intervalMs = Math.max(30_000, Number(cfg.instanceReapIntervalMs) || 60_000);
       const timer = setInterval(() => {
         void instanceManager.reapIdle().catch(() => {});
+        void instanceManager.reconcileShared().catch(() => {});
       }, intervalMs);
       if (typeof timer.unref === 'function') timer.unref();
       return () => clearInterval(timer);
@@ -4949,7 +5075,7 @@ export function apply(ctx, config = {}) {
   }
 
   function ownerTakeoverRequested(args) {
-    return Boolean(args && (args.ownerForce === true || args.takeover === true));
+    return Boolean(args && (args.ownerForce === true || args.takeover === true || args.force === true));
   }
 
   async function resolveToolApi(args, exec) {
@@ -4969,9 +5095,21 @@ export function apply(ctx, config = {}) {
     const owner = toolOwnerContext(args, exec);
     const force = ownerTakeoverRequested(args);
     const previousDefaultOwner = instanceManager ? instanceManager.ownerInfo('default') : null;
+    // A locked VM refuses every mutating tool call from a different owner, even
+    // when the call resolves through a saved agent mapping or ownerForce.
+    const assertUnlocked = (id) => {
+      if (!instanceManager || !instanceManager.leaseBook) return;
+      if (lockEnforcement === 'off') return;
+      const lease = instanceManager.leaseBook.get(id);
+      if (lease && lease.locked === true && lease.key !== owner.key) {
+        throw new VmLeaseConflict(id, lease);
+      }
+    };
     if (requested) {
       if (requested === 'default') {
-        if (instanceManager) instanceManager.claimOwner('default', owner, { force });
+        const claim = instanceManager ? instanceManager.claimOwner('default', owner, { force }) : null;
+        if (claim && claim.previous) recordOwnershipAction('takeover', 'default', owner, claim.previous);
+        assertUnlocked('default');
         const api = defaultToolApi();
         if (exec && exec.agent) void restoreSharedDesktop(api, owner, previousDefaultOwner);
         return api;
@@ -4979,11 +5117,14 @@ export function apply(ctx, config = {}) {
       if (!instanceManager) throw new Error('multi-instance support is disabled');
       const instance = instanceManager.get(requested);
       if (!instance) throw new Error(`unknown apk_vm instance: ${requested}`);
-      instanceManager.claimOwner(instance.id, owner, { force });
+      const claim = instanceManager.claimOwner(instance.id, owner, { force });
+      if (claim && claim.previous) recordOwnershipAction('takeover', instance.id, owner, claim.previous);
+      assertUnlocked(instance.id);
       return extraToolApi(instance);
     }
     if (instanceManager && exec && (exec.agent || owner.sessionId)) {
       const assigned = await instanceManager.forOwner(owner, { force });
+      assertUnlocked(assigned && assigned.default === true ? 'default' : assigned && assigned.id);
       if (assigned && assigned.default === true) {
         const api = defaultToolApi();
         if (exec && exec.agent) void restoreSharedDesktop(api, owner, previousDefaultOwner);
@@ -4992,19 +5133,58 @@ export function apply(ctx, config = {}) {
       if (assigned && assigned.id) registerInstanceRoutes?.(assigned.id);
       return extraToolApi(assigned);
     }
+    assertUnlocked('default');
     return defaultToolApi();
   }
 
+  /** Reject a promise that takes too long, with a structured, actionable error. */
+  function withToolTimeout(promise, timeoutMs, message) {
+    let timer;
+    const timeout = new Promise((_resolve, reject) => {
+      timer = setTimeout(() => {
+        const error = new Error(message);
+        error.code = 'vm-long-wait';
+        reject(error);
+      }, timeoutMs);
+      if (timer && typeof timer.unref === 'function') timer.unref();
+    });
+    return Promise.race([Promise.resolve(promise), timeout]).finally(() => clearTimeout(timer));
+  }
+
+  const TOOL_READY_WAIT_MS = 120 * 1000;
+  const TOOL_START_WAIT_MS = 180 * 1000;
   async function ensureToolApiReady(api, action) {
     let status = await api.status();
     if (isReady(status)) return status;
     if (action !== 'stop' && action !== 'start') {
-      // Tool calls are expected to operate on a running VM; boot on demand.
-      await api.start();
+      // Tool calls are expected to operate on a running VM; boot on demand, but
+      // never block the agent forever: a foreign/wedged emulator can keep the VM
+      // in booting for the full 1200s boot timeout, which reads as a hang.
+      const budget = TOOL_READY_WAIT_MS;
+      try {
+        await withToolTimeout(
+          Promise.resolve().then(() => api.start()),
+          budget,
+          `APK VM instance ${api.id} did not become ready within ${Math.round(budget / 1000)}s; it may be waiting for a foreign or wedged emulator. Check state/logTail, stop it if needed, then retry.`,
+        );
+      } catch (error) {
+        if (error && error.code === 'vm-long-wait') {
+          status = await api.status().catch(() => status);
+          if (isReady(status)) return status;
+          error.state = status && status.state;
+          error.serial = status && status.serial;
+        }
+        throw error;
+      }
       status = await api.status();
     }
     if (!isReady(status)) {
-      throw new Error(`APK VM instance ${api.id} is not ready (state: ${status.state}); start it first`);
+      const error = new Error(
+        `APK VM instance ${api.id} is not ready (state: ${status.state}); it may still be starting. Check state/logTail, then retry or stop it.`,
+      );
+      error.code = 'vm-not-ready';
+      error.state = status.state;
+      throw error;
     }
     return status;
   }
@@ -5266,7 +5446,7 @@ export function apply(ctx, config = {}) {
     }
   }
 
-  async function recordToolActivity(args, outcome, startedAt) {
+  async function recordToolActivity(args, outcome, startedAt, exec = null) {
     try {
       const action = String((args && args.action) || '').toLowerCase() || '(missing)';
       // Reading the playbook is not a VM operation and its summary is the whole
@@ -5276,17 +5456,32 @@ export function apply(ctx, config = {}) {
       const failure = outcome && outcome.result && outcome.result.error;
       let shot = null;
       if (ACTIVITY_SHOT_ACTIONS.has(action)) shot = await captureActivityShot(args);
+      let owner = null;
+      try {
+        if (instanceManager) {
+          const contextOwner = instanceManager.ownerFor(toolOwnerContext(args, exec));
+          owner = {
+            key: contextOwner.key,
+            label: contextOwner.label,
+            scope: contextOwner.scope,
+            role: contextOwner.role,
+          };
+        }
+      } catch {
+        owner = null;
+      }
       await activityLog.record({
         action,
         source: 'tool',
         tool: 'apk_vm',
-        instanceId: String((args && args.instance) || 'default'),
+        instanceId: String((exec && exec.apkvmInstanceId) || (args && args.instance) || 'default'),
         summary: outcome && outcome.summary ? String(outcome.summary).slice(0, 500) : ok ? 'ok' : 'failed',
         ok,
         error: failure ? String((failure && failure.message) || failure).slice(0, 800) : null,
         durationMs: Math.max(0, Date.now() - startedAt),
         argsPreview: activityArgsPreview(args),
         shot: shot || undefined,
+        owner: owner || undefined,
       });
     } catch {
       /* activity logging must never break the tool */
@@ -5306,7 +5501,7 @@ export function apply(ctx, config = {}) {
       'WebView actions use Chrome DevTools Protocol (CDP): webview list|eval|click|wait_for|insert_text over the app WebView. ' +
       'tap_selector clicks a DOM selector through CDP so CSS/dpr/status-bar math is not needed; type_text injects UTF-8 (including Chinese) through the scrcpy control stream. ' +
       'App-operation Skills use a persisted Control Codebook (stable codes such as LOGIN_BTN or A01) instead of raw coordinates; record once with skill_start + control_* then replay with skill_run to reach a page quickly. ' +
-      'VM ownership: pass ownerScope=conversation or project to use a dedicated VM for this session/project; shared is the default. owner_status / claim_vm / release_vm inspect or change the current lease. A VM owned by another conversation is never taken silently: the tool returns a vm-busy error unless ownerForce=true (explicit takeover). ' +
+      'VM ownership: pass ownerScope=conversation or project to use a dedicated VM for this session/project; shared is the default. Dedicated reservations are persisted (<profile>/.apk-vm/leases.json) and survive plugin restarts; other owners must use ownerForce=true (alias force=true) to take one over. owner_status / claim_vm / release_vm inspect or change the current lease. lock_vm / unlock_vm turn a lease into a hard lock: while locked, every mutating request from another agent or the panel is rejected with vm-locked (ownerForce cannot steal a locked VM); only the lock owner can control it, and a local admin can force an unlock from the panel. A VM owned by another conversation is never taken silently: the tool returns a vm-busy error unless ownerForce=true (explicit takeover). ' +
       'Multi-instance: pass `instance` to target an isolated VM; omit it to use the calling Agent\'s ' +
       'assigned instance (first Agent gets the default VM, later Agents get isolated instances). ' +
       'Use shell for low-level Android commands, logcat for logs, ' +
@@ -5327,7 +5522,8 @@ export function apply(ctx, config = {}) {
         instance: { type: 'string', description: 'Target VM instance id (default or an extra instance from list_instances). Omit for the calling Agent\'s assigned instance.' },
         ownerScope: { type: 'string', enum: ['shared', 'conversation', 'project'], description: 'VM ownership scope: shared (default), conversation (dedicated per DSH session), or project (dedicated per workspace).' },
         ownerLabel: { type: 'string', description: 'Optional human-readable owner label shown in the VM panel.' },
-        ownerForce: { type: 'boolean', description: 'Explicitly take over a VM owned by another conversation/project (default false; conflicts return vm-busy).' },
+        ownerForce: { type: 'boolean', description: 'Explicitly take over a VM owned/reserved by another conversation/project (default false; conflicts return vm-busy). force is accepted as an alias. Does not override a locked VM (vm-locked).' },
+        force: { type: 'boolean', description: 'Alias for ownerForce: explicitly take over a VM reserved by another conversation/project. Does not override a locked VM (vm-locked).' },
         instanceName: { type: 'string', description: 'create_instance: optional name for the new isolated instance.' },
         start: { type: 'boolean', description: 'create_instance: start the new instance immediately when true.' },
         command: { type: 'string', description: 'Shell command for action=shell.' },
@@ -5372,9 +5568,16 @@ export function apply(ctx, config = {}) {
         port: { type: 'integer', description: 'proxy: HTTP proxy port (1-65535).' },
         bypass: { type: 'string', description: 'proxy: optional no-proxy/exclusion list.' },
         flowId: { type: 'string', description: 'flow_replay: saved flow id from flow_list.' },
-        storageAction: { type: 'string', description: 'clean_storage: temp|snapshots|orphan-avds.' },
+        storageAction: {
+          type: 'string',
+          description: 'clean_storage: temp|snapshots|orphan-avds|corrupt-snapshots|crash-dumps.',
+        },
         avdName: { type: 'string', description: 'clean_storage snapshots: target AVD (defaults to the active AVD).' },
-        confirm: { type: 'boolean', description: 'clean_storage: required true for snapshot or orphan AVD deletion.' },
+        confirm: {
+          type: 'boolean',
+          description:
+            'Destructive actions require confirm=true: destroy_instance, and clean_storage snapshots/orphan-avds/corrupt-snapshots/crash-dumps.',
+        },
         networkAction: { type: 'string', description: 'network: info|mode|dns|hosts|test|validate|pcap|proxy|forward-add|forward-remove|reverse-add|reverse-remove|reverse-list.' },
         networkMode: { type: 'string', description: 'network mode: isolated|shared.' },
         localPort: { type: 'integer', description: 'port forward: host loopback port.' },
@@ -5453,7 +5656,7 @@ export function apply(ctx, config = {}) {
         });
       }
       // Fire-and-forget: the timeline must never slow down the Agent's call.
-      void recordToolActivity(args, outcome, startedAt);
+      void recordToolActivity(args, outcome, startedAt, exec);
       return outcome;
     },
 
@@ -5519,7 +5722,18 @@ export function apply(ctx, config = {}) {
       // device should trigger owner assignment/leasing.
       let toolApiPromise = null;
       const getToolApi = () => {
-        if (!toolApiPromise) toolApiPromise = resolveToolApi(args, exec);
+        if (!toolApiPromise) {
+          toolApiPromise = resolveToolApi(args, exec).then((api) => {
+            // The activity journal must name the VM that actually served the
+            // call: implicit resolution may pick a different instance than the
+            // requested/default id.
+            if (api && exec) exec.apkvmInstanceId = api.id;
+            // A default-VM tool call is real activity: keep the resident VM
+            // awake instead of suspending it under an active agent.
+            if (api && api.id === 'default' && instanceManager) instanceManager.noteSharedActivity();
+            return api;
+          });
+        }
         return toolApiPromise;
       };
 
@@ -5577,6 +5791,11 @@ export function apply(ctx, config = {}) {
         const id = args.instance || args.name;
         if (!id) throw new Error('destroy_instance requires instance');
         if (id === 'default') throw new Error('the default instance cannot be destroyed');
+        if (args.confirm !== true) {
+          throw new Error(
+            `destroy_instance requires confirm=true: it deletes the instance AVD ${id} and all of its data. Inspect it first, then retry with confirm=true.`,
+          );
+        }
         const result = await instanceManager.destroy(id);
         disposeInstanceRoutes?.(id);
         return { ok: true, summary: `destroyed instance ${id}`, result };
@@ -5668,6 +5887,7 @@ export function apply(ctx, config = {}) {
         if (id !== 'default' && !instanceManager.get(id)) throw new Error(`unknown instance: ${id}`);
         const owner = toolOwnerContext(args, exec);
         const result = instanceManager.claimOwner(id, owner, { force: ownerTakeoverRequested(args) });
+        if (result.previous) recordOwnershipAction('takeover', id, owner, result.previous);
         return {
           ok: true,
           summary: `claimed ${id} for ${result.lease.label}${result.previous ? ` (took over from ${result.previous.label})` : ''}`,
@@ -5680,10 +5900,39 @@ export function apply(ctx, config = {}) {
         if (id !== 'default' && !instanceManager.get(id)) throw new Error(`unknown instance: ${id}`);
         const owner = toolOwnerContext(args, exec);
         const released = instanceManager.releaseOwner(id, owner, { force: ownerTakeoverRequested(args) });
+        if (released) recordOwnershipAction('release', id, owner, released);
         return {
           ok: true,
           summary: released ? `released ${id} (was ${released.label})` : `${id} is not leased`,
           result: { instanceId: id, released },
+        };
+      }
+      if (action === 'lock_vm') {
+        if (!instanceManager) throw new Error('multi-instance support is disabled');
+        if (lockControl === 'user') throw new Error('vm-lock-restricted: only the user can lock a VM (use the panel Lock button); ask the user to lock it instead');
+        const id = String(args.instance || 'default');
+        if (id !== 'default' && !instanceManager.get(id)) throw new Error(`unknown instance: ${id}`);
+        const owner = toolOwnerContext(args, exec);
+        const locked = instanceManager.lockOwner(id, owner, { force: false });
+        recordOwnershipAction('lock', id, owner, locked);
+        return {
+          ok: true,
+          summary: `locked ${id} for ${locked.label}; other agents and users are blocked until unlock_vm`,
+          result: { instanceId: id, owner: locked },
+        };
+      }
+      if (action === 'unlock_vm') {
+        if (!instanceManager) throw new Error('multi-instance support is disabled');
+        if (lockControl === 'user') throw new Error('vm-lock-restricted: only the user can unlock a VM (use the panel Unlock button); ask the user to unlock it instead');
+        const id = String(args.instance || 'default');
+        if (id !== 'default' && !instanceManager.get(id)) throw new Error(`unknown instance: ${id}`);
+        const owner = toolOwnerContext(args, exec);
+        const unlocked = instanceManager.unlockOwner(id, owner, { force: false });
+        recordOwnershipAction('unlock', id, owner, unlocked);
+        return {
+          ok: true,
+          summary: `unlocked ${id}${unlocked ? ` (was locked by ${unlocked.label})` : ''}`,
+          result: { instanceId: id, owner: unlocked },
         };
       }
 
@@ -5863,6 +6112,12 @@ export function apply(ctx, config = {}) {
         } else if (storageAction === 'orphan-avds') {
           if (args.confirm !== true) throw new Error('clean_storage orphan-avds requires confirm=true');
           result = await cleanOrphanAvds({ knownAvds, activeAvds });
+        } else if (storageAction === 'corrupt-snapshots') {
+          if (args.confirm !== true) throw new Error('clean_storage corrupt-snapshots requires confirm=true');
+          result = await cleanCorruptSnapshots({ activeAvds });
+        } else if (storageAction === 'crash-dumps') {
+          if (args.confirm !== true) throw new Error('clean_storage crash-dumps requires confirm=true');
+          result = await cleanCrashDumps();
         } else throw new Error(`unsupported storageAction: ${storageAction}`);
         return {
           ok: true,
@@ -5943,7 +6198,12 @@ export function apply(ctx, config = {}) {
         throw new Error(`unsupported networkAction: ${networkAction}`);
       }
       if (action === 'start') {
-        const snapshot = await api.start();
+        const timeoutMs = Math.max(15000, Math.min(300000, Number(args.timeoutMs) || TOOL_START_WAIT_MS));
+        const snapshot = await withToolTimeout(
+          Promise.resolve().then(() => api.start()),
+          timeoutMs,
+          `APK VM instance ${api.id} did not finish starting within ${Math.round(timeoutMs / 1000)}s; it may be waiting for a foreign or wedged emulator. Check state/logTail, stop it if needed, then retry.`,
+        );
         return { ok: true, summary: `started ${api.id}`, result: snapshot || {} };
       }
       if (action === 'stop') {

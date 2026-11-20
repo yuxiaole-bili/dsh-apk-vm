@@ -468,38 +468,65 @@ instrumentation.
 
 Every running VM has a renewable **owner lease**, so two DSH conversations cannot silently drive
 the same emulator. A lease records the owner key, display label, scope (`shared`, `conversation`
-or `project`), session id, workspace, and `since` / `lastSeenAt` timestamps; leases expire after
-30 minutes (`leaseTtlMs`) and are renewed by `apk_vm` calls that route to that VM.
+or `project`), session id, workspace, `since` / `lastSeenAt` timestamps and, for dedicated VMs, a
+`reservedUntil` deadline. Leases are persisted to `<profile>/.apk-vm/leases.json` and restored on
+the next plugin start, so a dedicated VM stays reserved across DSH restarts. Shared leases expire
+after 30 minutes (`leaseTtlMs`); dedicated (`conversation`/`project`) leases keep a reservation for
+24 hours (`leaseReservationTtlMs`) that is renewed by `apk_vm` calls that route to that VM.
+
+The default VM is also **resident**: releasing its lease does not release or delete the VM. After
+`sharedSuspendAfterMs` idle (5 minutes by default) it suspends into its quick-boot snapshot (state
+`suspended`; the next start resumes in about 6 seconds), and after `sharedStopAfterMs` (1 hour)
+suspended it is marked `stopped`. The AVD and snapshot are always kept, and any `apk_vm` call,
+panel action or video client resets the idle timer and a later start resumes it on demand.
 
 - The first conversation that needs a VM claims the default instance. A different conversation
   gets a dedicated extra instance instead of taking the default one.
 - `ownerScope=conversation` gives the current DSH session a VM that follows it across turns;
   `ownerScope=project` does the same for the current workspace. `ownerScope=shared` keeps the
   first-come default behaviour.
-- If an `instance` is explicitly requested and owned by another conversation, the call fails with
-  `vm-busy` and the owner details. `ownerForce=true` is an explicit takeover and should be used
-  only after checking `owner_status`.
-- The VM instances card shows the current owner/scope. The **VM usage** card in the panel
-  shows a readable owner label and provides **Claim**, **Release** and a `shared` /
-  `conversation` / `project` scope control for the human user.
-- The Web panel is an administrator: it can operate a VM held by an Agent conversation and may
-  force **Claim** / **Release**, while ordinary Agent calls still get `409 vm-busy`. The panel
-  sends `x-apk-vm-role: admin`; the Host accepts that role only from loopback requests and
-  downgrades non-local callers to `user`.
-- `owner_status` lists default/extra VM leases; `claim_vm` and `release_vm` manage them.
-  HTTP: `GET|POST /apk-vm/ownership` (`status`, `claim`, `release`, `touch`), while
-  `GET /apk-vm/state` and `GET /apk-vm/instances` include owner metadata.
+- A reserved VM cannot be claimed by another owner without an explicit takeover. The response is
+  `409 vm-busy` with the owner short id and reservation deadline; pass `ownerForce=true` (alias
+  `force=true`) only after checking `owner_status`.
+- The VM instances card shows the current owner/scope/reservation. The **VM usage** card in the
+  panel shows a readable owner label and provides **Claim**, **Release** and a `shared` /
+  `conversation` / `project` scope control for the human user. For a VM held by another owner the
+  panel keeps the controls read-only and offers **Take over**.
+- The Web panel is an administrator, but admin mutations on a VM held by another owner are not
+  silent: they must be an explicit takeover, either by clicking **Take over** in the panel or by
+  sending `x-apk-vm-takeover: 1`. Otherwise the request fails with `409 vm-takeover-required`.
+  The panel sends `x-apk-vm-role: admin`; the Host accepts that role only from loopback requests
+  and downgrades non-local callers to `user`.
+- `owner_status` lists default/extra VM leases; `claim_vm` and `release_vm` manage them and report
+  the previous owner when a takeover happens. HTTP: `GET|POST /apk-vm/ownership` (`status`,
+  `claim`, `release`, `touch`), while `GET /apk-vm/state` and `GET /apk-vm/instances` include owner
+  metadata.
 - When the panel makes a mutating HTTP request it sends
   `x-apk-vm-owner`, `x-apk-vm-scope`, `x-apk-vm-session`, `x-apk-vm-workspace` and
   `x-apk-vm-label`. Header values may be percent-encoded (UTF-8); the Host decodes them, so
-  non-ASCII labels and workspace paths remain valid for browser `fetch`. A request that
-  supplies an owner header auto-claims a free VM; on a leased VM
-  it must match the current owner key. `POST /apk-vm/*` control routes return `409 vm-busy` with
-  the current owner when the header is missing or does not match. Read-only `GET` routes are
-  never blocked.
+  non-ASCII labels and workspace paths remain valid for browser `fetch`. A request that supplies
+  an owner header auto-claims a free VM; on a leased VM it must match the current owner key.
+  `POST /apk-vm/*` control routes return `409 vm-busy` (or `409 vm-takeover-required` for an
+  admin takeover) with the current owner when the header is missing or does not match. Read-only
+  `GET` routes are never blocked.
 - Closing a DSH conversation (the `session/disposed` event) automatically releases its leases,
-  with the 30-minute TTL as a fallback if that event is unavailable.
+  with the TTL as a fallback if that event is unavailable. Claim, release and takeover changes are
+  recorded in the activity journal together with the previous and incoming owner.
 
+
+VM operation locks go further than ownership: `lock_vm` / `unlock_vm` (or `POST /apk-vm/ownership`
+actions `lock`/`unlock`) make the current owner's lease a hard lock. While locked, every mutating
+request from another agent or the panel is rejected with `409 vm-locked`; `ownerForce`/takeover
+cannot break it, and only the lock owner can control the VM (a local admin can force-unlock from
+the panel). Locks are persisted in `<profile>/.apk-vm/leases.json` and the owner card shows
+Lock/Unlock.
+
+The lock policy is configurable. `lockEnforcement` is `all` (default: the lock blocks every
+other mutating client, including a panel takeover), `agents` (only other agents are blocked;
+the local panel is the human operator and can still operate a locked VM) or `off` (locks are
+advisory markers and never block). `lockControl` is `all` (default: an agent or the panel may
+lock/unlock) or `user` (only the panel/user may lock or unlock; the `lock_vm`/`unlock_vm`
+actions return an error).
 ## Multiple instances, physical devices and snapshots
 
 - **Isolated extra instances.** `POST /apk-vm/instances {"name":"agent-a","start":true}` creates a
@@ -571,6 +598,8 @@ card uses the same endpoint.
 { "action": "temp" }
 { "action": "snapshots", "avdName": "dsh_apk", "confirm": true }
 { "action": "orphan-avds", "confirm": true }
+{ "action": "corrupt-snapshots", "confirm": true }
+{ "action": "crash-dumps", "confirm": true }
 ```
 
 - `temp` removes only screenshots, MP4 recordings, uploaded APKs and flow JSON created by this
@@ -579,6 +608,13 @@ card uses the same endpoint.
   boot is a cold boot.
 - `orphan-avds` removes only `dsh_apk_*` AVDs that are not registered to any instance and are
   not active.
+- `corrupt-snapshots` deletes quarantined `*.corrupt-*` snapshot backups; `crash-dumps` deletes
+  emulator crash reports under the temp directory. `totals.reclaimableBytes` sums orphan AVDs,
+  corrupt backups, crash dumps and temp files, so it is the upper bound for one cleanup pass.
+- Every destructive action (`snapshots`, `orphan-avds`, `corrupt-snapshots`, `crash-dumps`,
+  `destroy_instance`) requires `confirm: true`; the panel asks for a second click.
+- An action that has to boot a VM fails after about 120 s (explicit `start`: 180 s, override
+  with `timeoutMs`) instead of blocking for the full boot timeout; the VM keeps booting.
 - `apk_vm` tool actions: `storage`, `clean_storage` (`storageAction`, `avdName`, `confirm`).
 
 ## Network controls
@@ -755,12 +791,21 @@ config:
   maxInstances: 3                  # extra VMs (default VM is always available)
   instanceIdleMs: 900000           # stop idle extra VMs after 15 min (AVD kept)
   instanceReapIntervalMs: 60000
+  # Resident shared default VM: lease can be released, VM/AVD are never deleted.
+  # Idle -> suspend into the quick-boot snapshot; longer idle -> state "stopped"
+  # (snapshot kept). Activity resets the timer and resumes it on demand.
+  sharedResident: true
+  sharedSuspendAfterMs: 300000     # suspend the default VM after 5 min idle
+  sharedStopAfterMs: 3600000       # mark it "stopped" after 1 h suspended
   memoryGuard: true                # cap instances from host RAM; refuse low-memory starts
   # hostReserveMb: 4096            # RAM kept for the host/other apps
   # estimatedVmMb: 3072            # estimated cost of one local emulator
   vmPreset: standard               # standard | lite (1 GB / 2 vCPU / SwiftShader / 720p30)
   memoryPressureReap: true         # stop LRU idle VMs before creating another one
   leaseTtlMs: 1800000              # VM owner lease lifetime; renewed by apk_vm calls
+  leaseReservationTtlMs: 86400000  # dedicated (conversation/project) lease reservation; 24h
+  lockEnforcement: all             # all | agents | off (operation-lock policy)
+  lockControl: all                 # all | user (who may lock/unlock a VM)
   allowRemote: false               # reject non-loopback VM API clients
   autoSetup: true                  # zero-config first run: auto-provision JDK 17 + SDK + image + AVD
   setupRetries: 3                  # retries per provisioning step (exponential backoff)
@@ -847,7 +892,13 @@ All keys are optional; defaults are shown in the **Default** column.
 | `memoryPressureReap` | `true` | When memory is tight, stop the least-recently-used idle local VM before creating another one. Extra VMs are stopped, never destroyed. |
 | `instanceIdleMs` | `900000` | Stop an extra instance after this long without panel frames, a video client, or an Agent command (AVD is kept). |
 | `instanceReapIntervalMs` | `60000` | How often the idle reaper checks extra instances. |
+| `sharedResident` | `true` | Keep the default VM resident: leases can be released, but the VM and its AVD are never released/deleted. After `sharedSuspendAfterMs` idle it suspends into its quick-boot snapshot (state `suspended`, ~6 s resume); after `sharedStopAfterMs` it is marked `stopped` (snapshot/AVD kept). Any tool/panel/stream activity resets the idle timer. |
+| `sharedSuspendAfterMs` | `300000` | Idle time (ms) before the resident default VM suspends into its quick-boot snapshot. |
+| `sharedStopAfterMs` | `3600000` | How long the resident default VM may stay suspended before it is marked `stopped` (snapshot is kept). |
 | `leaseTtlMs` | `1800000` | Lifetime of a VM owner lease. Every `apk_vm` call that routes to the VM renews it; set `0` to disable expiry. |
+| `leaseReservationTtlMs` | `86400000` | How long a `conversation`/`project` lease stays reserved for its owner across restarts. The VM cannot be claimed by another owner until it expires (explicit takeover still allowed). |
+| `lockEnforcement` | `all` | Operation-lock policy: `all` (hard lock for every other mutating client, including a panel takeover), `agents` (only other agents are blocked; the local panel may still operate a locked VM), `off` (locks are advisory and never block). |
+| `lockControl` | `all` | Who may lock/unlock: `all` (agents or the panel) or `user` (panel/user only; `lock_vm`/`unlock_vm` return an error). |
 | `allowRemote` | `false` | Allow non-loopback clients to reach `/apk-vm/*` and `/apk-vm/ws` (only behind your own authenticated proxy). |
 | `allowSetupDownloads` | `false` | Allow the Environment card's `install-image` action to run `sdkmanager --install` (large download). |
 | `autoSetup` | `true` | Provision a missing JDK 17 / SDK packages / system image / AVD automatically on first use (roughly 2.5 GB on a cold machine). Set `false` to keep setup manual. |
@@ -1000,7 +1051,7 @@ JSON bodies are bounded to 64 KiB; the raw APK upload is bounded to 500 MiB.
 | POST | `/apk-vm/stream` | `{"fps":1–10}` — set the PNG fallback target frame rate. |
 | POST | `/apk-vm/stream/quality` | `{"preset":"low\|balanced\|high"}` — change H.264 resolution/bitrate/fps; the scrcpy session reconnects. |
 | GET (upgrade) | `/apk-vm/ws` | WebSocket H.264 stream (see above). |
-| GET/POST | `/apk-vm/ownership` | `GET` lists VM leases; `POST {"action":"claim\|release\|touch","instanceId":"default","ownerScope":"shared\|conversation\|project","sessionId"?,"workspace"?,"force"?}` manages the owner lease. |
+| GET/POST | `/apk-vm/ownership` | `GET` lists VM leases; `POST {"action":"claim\|release\|touch","instanceId":"default","ownerScope":"shared\|conversation\|project","sessionId"?,"workspace"?,"force"?}` manages the owner lease. `force:true` is only for an explicit takeover; an admin call on a foreign reservation must send `x-apk-vm-takeover: 1`. |
 | GET | `/apk-vm/instances` | List default + extra VM instances, including `name`, `owner`, `ownerInfo` (`key`, `label`, `scope`, `sessionId`, `workspace`, `since`, `lastSeenAt`), `lastUsedAt`, `idleMs`, `idleTimeoutMs`, `videoClients`. |
 | POST | `/apk-vm/instances` | `{"name":"agent-a","start":true}` — create an isolated AVD/VM; every extra instance has its own H.264 stream. `{"action":"rename","instance":"default","name":"QA phone"}` sets a display name. |
 | DELETE | `/apk-vm/instances/:id` | Stop/dispose an extra instance (the default cannot be destroyed). |
@@ -1087,10 +1138,12 @@ its home screen.
 For concurrent Agents, pass `instance` to target a specific VM; when omitted, the tool resolves
 the calling Agent's lease and assigned instance (first conversation → default VM, later
 conversations → isolated instances created on demand until `maxInstances`). Set
-`ownerScope=conversation` or `ownerScope=project` to request a dedicated VM for the current DSH
-session/workspace. `owner_status` lists leases, `claim_vm` / `release_vm` manage them, and
-`ownerForce=true` is required for an explicit takeover. Each extra instance has its own H.264
-WebSocket (`/apk-vm/instances/<id>/ws`) and falls back to PNG if WebCodecs is unavailable.
+`ownerScope=conversation` or `ownerScope=project` to reserve a dedicated VM for the current DSH
+session/workspace; the reservation survives plugin restarts (24 h by default,
+`leaseReservationTtlMs`). `owner_status` lists leases, `claim_vm` / `release_vm` manage them, and
+`ownerForce=true` (alias `force=true`) is required for an explicit takeover. Each extra instance
+has its own H.264 WebSocket (`/apk-vm/instances/<id>/ws`) and falls back to PNG if WebCodecs is
+unavailable.
 
 UI automation is live-verified against a multi-instance VM: `find_ui {"text":"Phone"}` returned
 `Phone @ 102,1121`, `assert_text {"text":"Phone"}` found one node, `tap_text {"text":"Phone"}`

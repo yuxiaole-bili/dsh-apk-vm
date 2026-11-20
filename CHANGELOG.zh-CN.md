@@ -4,6 +4,68 @@
 0.12.0 之前的历史仅保留在英文文件中。发布时请在 [docs/RELEASING.md](docs/RELEASING.md)
 的检查清单里确认本文件已同步更新。
 
+## 0.13.0
+
+归属管理版本：专属虚拟机在重启后依然保留，接管必须显式确认。
+
+- **虚拟机操作锁。** `lock_vm` / `unlock_vm`（以及 `POST /apk-vm/ownership` 的 `lock`/`unlock`）
+  会把租约变成硬锁：锁定期间其他 Agent 与面板的变更请求一律返回 `409 vm-locked`，
+  `ownerForce` 与接管都无法绕过；只有锁所有者（或本地管理员解锁）可以继续操作。
+  锁会持久化到 `leases.json`，面板提供「锁定/解锁」按钮。两个配置项可调整策略：
+  `lockEnforcement`（`all` | `agents` | `off`）与 `lockControl`（`all` | `user`）。
+### 新增
+
+- **租约持久化与专属保留。** 租约写入 `<profile>/.apk-vm/leases.json`，并在插件下次启动时
+  恢复。专属（`conversation`/`project`）虚拟机在 DSH 重启后仍保留给原 owner，不会再被第一个
+  请求的会话拿走。专属租约带 `reservedUntil` 截止时间（`leaseReservationTtlMs`，默认 24 小时），
+  过期后可正常认领。
+- **接管显式化并留痕。** 被他人占用的租约会在 409 响应中携带 owner 短 id 与保留截止时间；
+  面板显示保留信息、对其他 owner 保持只读，并提供「接管」按钮；非显式接管的管理员变更返回
+  `vm-takeover-required`（`x-apk-vm-takeover: 1`），不再静默操作他人虚拟机。claim/release/takeover
+  变更会记录到活动日志（含前后 owner）。
+- **`force` 作为 `ownerForce` 的别名。** `apk_vm` 接受 `force: true`，错误文案与实际参数一致；
+  `claim_vm`/`release_vm` 在接管时会报告前一个 owner。
+- **活动日志补充 owner 维度。** 记录 `owner`（key/label/scope/role），并经过统一脱敏，便于多会话
+  与面板同时操作时追溯「谁做了什么」。
+- **常驻共享默认虚拟机。** 默认虚拟机永不释放、永不删除。空闲 `sharedSuspendAfterMs`（默认 5 分钟）
+  后挂起到快速启动快照（状态 `suspended`，约 6 秒恢复）；再空闲 `sharedStopAfterMs`（默认 1 小时）
+  后标记为 `stopped`，快照与 AVD 均保留。工具调用、面板操作与视频客户端都会重置空闲计时，下次启动
+  按需恢复。
+- **存储统计覆盖崩溃残留与孤儿 AVD。** `GET /apk-vm/storage` 现在报告隔离的 `*.corrupt-*`
+  快照备份、模拟器崩溃转储以及可回收总量 `reclaimableBytes`；`POST /apk-vm/storage` 新增
+  `corrupt-snapshots` 与 `crash-dumps`（均需 `confirm: true`），存储卡片显示可回收大小并可
+  一键清理。
+- **危险操作二次确认。** `destroy_instance` 需要 `confirm: true`，面板删除按钮需点击两次，
+  避免 agent 或误点直接删除实例 AVD 与数据；实例 DELETE 路由也拒绝不带 `?confirm=1` 的请求。
+
+### 变更
+
+- 面板的 claim/release 不再默认强制：`POST /apk-vm/ownership` 仅在请求体带 `force: true` 时强制，
+  并且所有 owner 变更都会写入活动日志。
+- **工具等待有上界。** 需要启动 VM 的设备操作约 120 秒后（显式 `start` 为 180 秒，可用
+  `timeoutMs` 覆盖）返回可操作错误，而不是等满 1200 秒启动超时；VM 仍在后台继续启动，稍后
+  再调用可观察到 ready；另外 `maybeAutoStart` 会跳过处于崩溃循环的 VM。
+
+### 修复
+
+- 保留中的租约可能被其他会话或管理面板静默抢占。
+- 租约只存在内存中，插件重载后丢失，导致专属 VM 在重启后被重新分配。
+- 显式 `claim_vm` 后，未指定 `instance` 的后续工具调用可能仍落在之前分配的虚拟机上：现在
+  认领会同步更新该会话在 conversation/project/shared 三种范围下的实例映射，下一次调用会
+  解析到刚刚认领的虚拟机。
+- 活动日志记录的是「请求的实例 id」（未指定时按 `default` 记录），而不是实际执行调用的
+  虚拟机，导致这类错配在日志里看不出来；现在记录实际解析到的实例。
+
+- 修复 `recordOwnershipAction is not defined`（`ReferenceError`）导致工具与 HTTP 接管路径
+  失败：日志助手改在插件作用域定义，`claim_vm`/`vm` 接管与归属活动记录恢复正常。
+- Windows 模拟器在写入 quick-boot 快照时或之后可能崩溃（`0xC0000005`）：现在会跟踪快照保存
+  状态——保存期间到来的 `start` 会等待完成；保存后崩溃会禁用后续快照保存、隔离损坏快照并
+  以冷启动重试一次。
+- 不完整的 quick-boot 快照（`ram.bin` 过小或 `snapshot.pb` 写了一半）现在会在启动前被隔离，
+  启动计划改用 `-no-snapshot-load` 冷启动，损坏快照不会再导致模拟器反复崩溃重启。
+- **崩溃循环熔断。** 15 分钟内三次非零退出会暂停自动恢复/自动启动并禁用快照保存，原因写入
+  state error 与 logTail；请检查模拟器日志/崩溃转储后手动启动。
+
 ## 0.12.5
 
 可靠性版本：零配置首次启动的抗网络故障能力，以及多 VM 宿主机的内存管理。
