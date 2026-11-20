@@ -450,7 +450,11 @@ check('create(standard default): AVD config untouched and profile fields null', 
     const text = readAvdConfig(avdName);
     assert.match(text, /^hw\.ramSize = 1536$/m);
     assert.match(text, /^hw\.cpu\.ncore = 4$/m);
-    assert.equal(instance.vm.gpuMode, 'host');
+    // lib/android.js falls back from "host" GPU to the software renderer on
+    // headless Linux (CI runners have neither DISPLAY nor WAYLAND_DISPLAY).
+    const headlessLinux =
+      process.platform === 'linux' && !process.env.DISPLAY && !process.env.WAYLAND_DISPLAY;
+    assert.equal(instance.vm.gpuMode, headlessLinux ? 'swiftshader_indirect' : 'host');
 
     const listed = manager.list().find((entry) => entry.id === 'standard-vm');
     assert.equal(listed.ramSizeMb, null);
