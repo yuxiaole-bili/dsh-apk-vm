@@ -4,6 +4,17 @@
 0.12.0 之前的历史仅保留在英文文件中。发布时请在 [docs/RELEASING.md](docs/RELEASING.md)
 的检查清单里确认本文件已同步更新。
 
+## 0.14.0 — 2026-11-21
+
+### 新增
+
+- **ARM 转译（x86_64 主机运行 arm64-v8a APK）。** 设置 `armTranslation: true` 后使用 Google APIs
+  镜像（`system-images;android-34;google_apis;x86_64`），该镜像自带 Google 的
+  `libndk_translation.so` 原生桥与 `arm64-v8a` ABI，因此仅含 arm64 原生库的 APK 可直接安装运行，
+  无需插件捆绑任何专有库。`apk_vm info` 与 `/apk-vm/state` 会报告 guest 的
+  `abilist`/`nativeBridge`/`armTranslation` 状态；若 APK 的原生库与 guest 所有 ABI 都不匹配，
+  安装会返回可操作的错误并提示该配置项。AOSP `default` 镜像仍为零配置默认。
+
 ## 0.13.0
 
 归属管理版本：专属虚拟机在重启后依然保留，接管必须显式确认。

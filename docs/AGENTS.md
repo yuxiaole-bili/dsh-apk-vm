@@ -152,6 +152,16 @@ The plugin configuration can relax this: `lockEnforcement: agents` blocks only o
 `lockControl: user` limits lock/unlock to the panel/user (`lock_vm`/`unlock_vm` return a
 `vm-lock-restricted` error).
 
+## ARM translation
+
+By default the VM runs the AOSP `default` image, which has `x86_64` only. A VM created with
+`armTranslation: true` uses the Android 14 Google APIs image instead: it ships Google's
+`libndk_translation.so` native bridge and advertises `arm64-v8a`, so APKs with only arm64 native
+libraries install and run. `apk_vm info` exposes `abilist`, `nativeBridge` and `armTranslation`;
+`/apk-vm/state` exposes `armTranslation.{enabled,guestArmTranslation,abilist,nativeBridge}`. An
+APK with no matching native ABI (for example an arm64-only APK on the AOSP image) fails with
+`INSTALL_FAILED_NO_MATCHING_ABIS` plus a hint to enable `armTranslation` and recreate the VM.
+
 ## Instances and remote VMs
 
 - `list_instances` lists `default`, extra instances and remote sessions. Remote sessions appear

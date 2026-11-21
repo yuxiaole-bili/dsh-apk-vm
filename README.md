@@ -527,6 +527,17 @@ the local panel is the human operator and can still operate a locked VM) or `off
 advisory markers and never block). `lockControl` is `all` (default: an agent or the panel may
 lock/unlock) or `user` (only the panel/user may lock or unlock; the `lock_vm`/`unlock_vm`
 actions return an error).
+
+### ARM translation (arm64-v8a APKs on x86_64 hosts)
+
+Android 14 Google APIs images ship Google's `libndk_translation.so` native bridge and advertise the
+`arm64-v8a` ABI, so APKs with only arm64 native libraries install and run on the x86_64 emulator.
+Set `armTranslation: true` (or point `systemImage` at a Google APIs image yourself) to use
+`system-images;android-34;google_apis;x86_64` instead of the AOSP image; the image is provisioned
+through `sdkmanager` (about 1.3 GB, first download needs `allowSetupDownloads: true`). The guest
+reports its ABI list and native bridge in `apk_vm info` (`abilist`, `nativeBridge`,
+`armTranslation`) and `/apk-vm/state` (`armTranslation`). Installing an APK whose native libraries
+match no ABI of the guest returns an actionable error that names this option.
 ## Multiple instances, physical devices and snapshots
 
 - **Isolated extra instances.** `POST /apk-vm/instances {"name":"agent-a","start":true}` creates a
@@ -806,6 +817,7 @@ config:
   leaseReservationTtlMs: 86400000  # dedicated (conversation/project) lease reservation; 24h
   lockEnforcement: all             # all | agents | off (operation-lock policy)
   lockControl: all                 # all | user (who may lock/unlock a VM)
+  # armTranslation: true         # use the Google APIs image (libndk_translation + arm64-v8a ABIs)
   allowRemote: false               # reject non-loopback VM API clients
   autoSetup: true                  # zero-config first run: auto-provision JDK 17 + SDK + image + AVD
   setupRetries: 3                  # retries per provisioning step (exponential backoff)
@@ -865,7 +877,7 @@ All keys are optional; defaults are shown in the **Default** column.
 | `port` | `5558` | Emulator console port used when spawning. |
 | `sdkRoot` | `ANDROID_HOME` / `ANDROID_SDK_ROOT` | Android SDK root for `adb`, `aapt2`, `emulator-check`, `sdkmanager`/`avdmanager`. |
 | `adbPath` | `<sdk>/platform-tools/adb` | Explicit adb executable. |
-| `systemImage` | `system-images;android-34;default;x86_64` (`arm64-v8a` on arm64 hosts) | System image required by the Environment card and used for AVD creation. |
+| `systemImage` | `system-images;android-34;default;x86_64` (`arm64-v8a` on arm64 hosts) | System image required by the Environment card and used for AVD creation. Set `armTranslation: true` instead to use the Google APIs image, which ships `libndk_translation.so` and the `arm64-v8a` ABI. |
 | `spawnEmulator` | `true` | Set `false` to only attach (never spawn). |
 | `emulatorArgs` | `[]` | Extra argv appended to the emulator command line. |
 | `roots` | `[]` | Extra APK discovery roots. The DSH working directory, `process.cwd()` and the home directory are added automatically. |
@@ -899,6 +911,7 @@ All keys are optional; defaults are shown in the **Default** column.
 | `leaseReservationTtlMs` | `86400000` | How long a `conversation`/`project` lease stays reserved for its owner across restarts. The VM cannot be claimed by another owner until it expires (explicit takeover still allowed). |
 | `lockEnforcement` | `all` | Operation-lock policy: `all` (hard lock for every other mutating client, including a panel takeover), `agents` (only other agents are blocked; the local panel may still operate a locked VM), `off` (locks are advisory and never block). |
 | `lockControl` | `all` | Who may lock/unlock: `all` (agents or the panel) or `user` (panel/user only; `lock_vm`/`unlock_vm` return an error). |
+| `armTranslation` | `false` | Use the Google APIs system image (`system-images;android-34;google_apis;x86_64`), which ships Google's `libndk_translation.so` and the `arm64-v8a` ABI so arm64-only APKs install and run on the x86_64 emulator. An explicit `systemImage` wins over this flag. |
 | `allowRemote` | `false` | Allow non-loopback clients to reach `/apk-vm/*` and `/apk-vm/ws` (only behind your own authenticated proxy). |
 | `allowSetupDownloads` | `false` | Allow the Environment card's `install-image` action to run `sdkmanager --install` (large download). |
 | `autoSetup` | `true` | Provision a missing JDK 17 / SDK packages / system image / AVD automatically on first use (roughly 2.5 GB on a cold machine). Set `false` to keep setup manual. |

@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.14.0 — 2026-11-21
+
+### Added
+
+- **ARM translation (arm64-v8a APKs on x86_64 hosts).** `armTranslation: true` selects the
+  Google APIs image (`system-images;android-34;google_apis;x86_64`), which ships Google's
+  `libndk_translation.so` native bridge plus the `arm64-v8a` ABI, so arm64-only APKs install and
+  run without bundling a proprietary blob. `apk_vm info` and `/apk-vm/state` report the guest
+  `abilist`/`nativeBridge`/`armTranslation` state, and an APK whose native libraries match no
+  guest ABI now fails with an actionable error that names this option. The AOSP `default` image
+  remains the zero-config default.
+
 ## 0.13.0
 
 ### Added

@@ -28,7 +28,7 @@ import { defaultInstanceNamesPath } from './lib/instance-names.js';
 import { OWNER_SCOPE, VmLeaseConflict, normalizeScope } from './lib/vm-ownership.js';
 import { TAKEOVER_HEADER, checkOwnerAccess, ownerFromHttp, takeoverFromHttp } from './lib/http-owner.js';
 import { ScrcpySession, annexbToAvcc, CONTROL_MESSAGE_TYPE } from './lib/scrcpy.js';
-import { detectEnvironment, createAvd, installSystemImage, installSdkPackages, bootstrapSdk, DEFAULT_SYSTEM_IMAGE } from './lib/setup.js';
+import { detectEnvironment, createAvd, installSystemImage, installSdkPackages, bootstrapSdk, resolveSystemImage } from './lib/setup.js';
 import { createAutoSetup } from './lib/autosetup.js';
 import { ensureJdk, defaultJdkRoot } from './lib/jdk.js';
 import { acceptWebSocket } from './lib/ws.js';
@@ -373,6 +373,11 @@ export function apply(ctx, config = {}) {
     ? cfg.lockEnforcement
     : 'all';
   const lockControl = cfg.lockControl === 'user' ? 'user' : 'all';
+  // ARM translation: the Google APIs image ships Google's libndk_translation
+  // native bridge plus the arm64-v8a ABI, so arm64-only APKs install and run
+  // without bundling any proprietary blob.
+  const armTranslation = cfg.armTranslation === true;
+  const systemImage = resolveSystemImage({ systemImage: cfg.systemImage, armTranslation });
   const vm = new AndroidVm({
     sdkRoot: cfg.sdkRoot || process.env.ANDROID_HOME || process.env.ANDROID_SDK_ROOT || undefined,
     adbPath: cfg.adbPath || undefined,
@@ -405,7 +410,7 @@ export function apply(ctx, config = {}) {
           sdkRoot: vm.sdkRoot || cfg.sdkRoot || undefined,
           adbPath: vm.adbPath,
           emulatorPath: vm.emulatorPath,
-          systemImage: cfg.systemImage || DEFAULT_SYSTEM_IMAGE,
+          systemImage: systemImage,
           baseAvdName: cfg.avdName || 'dsh_apk',
           namesFile: defaultInstanceNamesPath(dataRoot),
           maxInstances: cfg.maxInstances || 3,
@@ -562,7 +567,7 @@ export function apply(ctx, config = {}) {
       adbPath: cfg.adbPath || undefined,
       emulatorPath: cfg.emulatorPath || undefined,
       avdName: cfg.avdName || undefined,
-      systemImage: cfg.systemImage || DEFAULT_SYSTEM_IMAGE,
+      systemImage: systemImage,
       jdkRoot: configuredJdkRoot,
     });
     setupCacheAt = now;
@@ -687,7 +692,7 @@ export function apply(ctx, config = {}) {
       adbPath: cfg.adbPath || undefined,
       emulatorPath: cfg.emulatorPath || undefined,
       avdName: cfg.avdName || 'dsh_apk',
-      systemImage: cfg.systemImage || DEFAULT_SYSTEM_IMAGE,
+      systemImage: systemImage,
       platform: process.platform,
       jdkRoot: configuredJdkRoot,
       jdkMirror: cfg.jdkMirror,
@@ -1434,7 +1439,21 @@ export function apply(ctx, config = {}) {
     }
     const status = await vm.status();
     if (!isReady(status)) throw new Error(`VM is not ready (state: ${status.state}); start it first`);
-    const meta = await vm.installApk(apkPath);
+    let meta;
+    try {
+      meta = await vm.installApk(apkPath);
+    } catch (error) {
+      const message = String((error && error.message) || error);
+      if (/INSTALL_FAILED_NO_MATCHING_ABIS/i.test(message)) {
+        throw new Error(
+          `${message} — the APK ships native libraries for an ABI this VM does not support. ` +
+            'Enable ARM translation (armTranslation: true) in <profile>/cordis.patch.yml: it selects ' +
+            'the Google APIs image, which carries libndk_translation.so and the arm64-v8a ABI. ' +
+            'Then restart the VM and install again.',
+        );
+      }
+      throw error;
+    }
     lastApk = {
       path: apkPath,
       packageName: meta.packageName || null,
@@ -1688,6 +1707,14 @@ export function apply(ctx, config = {}) {
       shared: instanceManager && typeof instanceManager.sharedStatus === 'function' ? instanceManager.sharedStatus() : null,
       // Operation-lock policy: 'all' | 'agents' | 'off' + lock control 'all' | 'user'.
       lockPolicy: { enforcement: lockEnforcement, control: lockControl },
+      // ARM64 translation: config intent plus what the guest actually reports.
+      armTranslation: {
+        enabled: armTranslation,
+        systemImage,
+        guestArmTranslation: Boolean(status.identity && status.identity.armTranslation),
+        abilist: status.identity && Array.isArray(status.identity.abilist) ? status.identity.abilist : [],
+        nativeBridge: status.identity ? status.identity.nativeBridge || null : null,
+      },
       client: lastClientReport,
       owner: instanceManager ? instanceManager.ownerInfo('default') : null,
       instances: [
@@ -2704,7 +2731,7 @@ export function apply(ctx, config = {}) {
           jdkRoot: configuredJdkRoot,
           emulatorPath: cfg.emulatorPath || undefined,
           avdName: body.avdName || cfg.avdName || 'dsh_apk',
-          systemImage: cfg.systemImage || DEFAULT_SYSTEM_IMAGE,
+          systemImage: systemImage,
         });
         setupCache = null;
         sendJson(res, 200, { ok: result.ok === true, action, result });
@@ -2718,7 +2745,7 @@ export function apply(ctx, config = {}) {
         const result = await installSystemImage({
           sdkRoot: cfg.sdkRoot || undefined,
           jdkRoot: configuredJdkRoot,
-          systemImage: cfg.systemImage || DEFAULT_SYSTEM_IMAGE,
+          systemImage: systemImage,
           acceptLicenses: true,
           ...provisionNetworkOptions(),
         });
@@ -2731,7 +2758,7 @@ export function apply(ctx, config = {}) {
           sendError(res, 403, 'downloading Android SDK components is disabled; set allowSetupDownloads: true to enable it');
           return;
         }
-        const image = String(cfg.systemImage || DEFAULT_SYSTEM_IMAGE);
+        const image = String(systemImage);
         const apiLevel = (image.split(';')[1] || 'android-34').replace(/^android-/, '');
         const packages = Array.isArray(body.packages) && body.packages.length
           ? body.packages
@@ -2984,6 +3011,16 @@ export function apply(ctx, config = {}) {
           installing: Boolean(instance.installInFlight),
           origin: serverOrigin,
           stream: { fps: 2, hostFps: null, h264: instance.videoStatus ? instance.videoStatus() : { enabled: false, active: false, clients: 0, maxFps: 0 } },
+          armTranslation: (() => {
+            const identity = instance.vm && instance.vm._identity ? instance.vm._identity : null;
+            return {
+              enabled: armTranslation,
+              systemImage,
+              guestArmTranslation: Boolean(identity && identity.armTranslation),
+              abilist: identity && Array.isArray(identity.abilist) ? identity.abilist : [],
+              nativeBridge: (identity && identity.nativeBridge) || null,
+            };
+          })(),
         };
       };
 

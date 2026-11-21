@@ -10,7 +10,13 @@
         # emulatorPath explicitly only for non-standard installs.
         # sdkRoot: 'D:/Android/sdk'
         # emulatorPath: 'D:/Android/sdk/emulator/emulator.exe'
-        systemImage: 'system-images;android-34;default;x86_64'
+        # systemImage: 'system-images;android-34;default;x86_64'
+        # ARM translation: use the Google APIs image instead of the AOSP one.
+        # Android 14 x86_64 Google APIs images ship Google's libndk_translation
+        # native bridge plus the arm64-v8a ABI, so arm64-only APKs install and
+        # run. The image is downloaded through sdkmanager (about 1.3 GB) and
+        # needs allowSetupDownloads: true for first-time provisioning.
+        armTranslation: false
         avdName: dsh_apk
         bootTimeoutMs: 1200000
         gpuMode: host
