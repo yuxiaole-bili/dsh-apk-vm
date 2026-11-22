@@ -26,11 +26,75 @@ window.__ModuleLoader__.load({
     var h = React.createElement;
 
     var NS = 'apk-vm';
+    var BUNDLE_NAME = 'dsh-apk-vm';
+    var PLUGIN_NAVIGATION_GETTER = null;
+
+    function setPluginNavigationGetter(getter) {
+      PLUGIN_NAVIGATION_GETTER = typeof getter === 'function' ? getter : null;
+    }
+
+    function getPluginNavigation() {
+      try {
+        return PLUGIN_NAVIGATION_GETTER ? PLUGIN_NAVIGATION_GETTER() : null;
+      } catch (error) {
+        return null;
+      }
+    }
+
+    function openPluginPage() {
+      try {
+        var nav = getPluginNavigation();
+        if (nav && typeof nav.openBundle === 'function') {
+          nav.openBundle(BUNDLE_NAME);
+          return true;
+        }
+      } catch (error) {}
+      return false;
+    }
+
+    function readPluginVersion(force) {
+      try {
+        if (typeof fetch !== 'function') return Promise.resolve(null);
+        return fetch('/apk-vm/version?force=' + (force ? '1' : '0'), { cache: 'no-store' })
+          .then(function (response) { return response.json(); })
+          .then(function (body) { return body && body.ok && body.value ? body.value : null; })
+          .catch(function () { return null; });
+      } catch (error) {
+        return Promise.resolve(null);
+      }
+    }
+
+    function readPluginSettings() {
+      try {
+        if (typeof fetch !== 'function') return Promise.resolve(null);
+        return fetch('/apk-vm/settings', { cache: 'no-store' })
+          .then(function (response) { return response.json(); })
+          .then(function (body) { return body && body.ok ? body : null; })
+          .catch(function () { return null; });
+      } catch (error) {
+        return Promise.resolve(null);
+      }
+    }
+
+    function writePluginSettings(patch) {
+      try {
+        if (typeof fetch !== 'function') return Promise.resolve(null);
+        return fetch('/apk-vm/settings', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ patch: patch || {} }),
+        })
+          .then(function (response) { return response.json(); })
+          .catch(function () { return { ok: false, error: 'network error' }; });
+      } catch (error) {
+        return Promise.resolve({ ok: false, error: 'network error' });
+      }
+    }
     var VM_STATES = ['stopped', 'starting', 'booting', 'ready', 'error'];
     var SWIPE_THRESHOLD_PX = 24;
     var FRAME_INTERVAL_MS = 500;
     var STATE_INTERVAL_MS = 2000;
-    var CLIENT_VERSION = '0.14.0';
+    var CLIENT_VERSION = '0.14.1';
 
     /* ------------------------------------------------------------------ *
      * Optional dsh-better-sidebar integration.
@@ -101,6 +165,23 @@ window.__ModuleLoader__.load({
 
     var EN = {
       'nav.label': 'APK VM',
+      'update.label': 'New version {version} is available',
+      'update.hint': 'Click to open the plugin page and update.',
+      'update.open': 'Update now',
+      'update.settings': 'Plugin settings',
+      'update.dismiss': 'Dismiss',
+      'update.checking': 'Checking for updates…',
+      'settings.title': 'APK VM settings',
+      'settings.subtitle': 'These settings are stored in the plugin configuration. Saving restarts the plugin briefly.',
+      'settings.loading': 'Loading settings…',
+      'settings.save': 'Save settings',
+      'settings.saving': 'Saving…',
+      'settings.saved': 'Saved. The plugin is restarting to apply the changes.',
+      'settings.error': 'Could not save settings: {error}',
+      'settings.readonly': 'Settings cannot be edited in this profile: {reason}',
+      'settings.none': 'No editable settings are available.',
+      'settings.openPlugin': 'Open plugin page',
+      'settings.restartHint': 'The plugin restarts automatically after saving.',
       'title': 'APK Virtual Machine',
       'subtitle': 'Boot a local open-source Android VM, install an APK, and preview its screen.',
       'apk.current': 'Current APK: {name}',
@@ -533,6 +614,23 @@ window.__ModuleLoader__.load({
 
     var ZH = {
       'nav.label': 'APK 虚拟机',
+      'update.label': '新版本 {version} 已发布',
+      'update.hint': '点击前往插件页更新。',
+      'update.open': '前往更新',
+      'update.settings': '插件设置',
+      'update.dismiss': '关闭',
+      'update.checking': '正在检查更新…',
+      'settings.title': 'APK 虚拟机设置',
+      'settings.subtitle': '这些设置保存在插件配置中；保存后插件会短暂重启。',
+      'settings.loading': '正在加载设置…',
+      'settings.save': '保存设置',
+      'settings.saving': '保存中…',
+      'settings.saved': '已保存，插件正在重启以应用更改。',
+      'settings.error': '保存设置失败：{error}',
+      'settings.readonly': '此 profile 中无法编辑设置：{reason}',
+      'settings.none': '没有可编辑的设置。',
+      'settings.openPlugin': '打开插件页',
+      'settings.restartHint': '保存后插件会自动重启。',
       'title': 'APK 虚拟机',
       'subtitle': '启动本地开源 Android 虚拟机，安装 APK 并在此预览屏幕。',
       'apk.current': '当前 APK：{name}',
@@ -1375,6 +1473,24 @@ window.__ModuleLoader__.load({
      * (bg-base / bg-layer-1/2, border-l1/l2, label-primary/secondary,
      * brand-primary, state-*-primary) — no literal palette colors.
      * ------------------------------------------------------------------ */
+
+        var PLUGIN_UI_CSS = [
+      '.apkvm-update-banner{display:flex;align-items:center;gap:10px;padding:8px 10px;margin:0 0 10px;border:1px solid var(--dsw-alias-border-l1);border-radius:10px;background:var(--dsw-alias-bg-layer-1);font-size:12px;line-height:1.4}',
+      '.apkvm-update-banner .apkvm-update-text{flex:1;min-width:0;color:var(--dsw-alias-label-primary)}',
+      '.apkvm-update-btn{border:1px solid var(--dsw-alias-border-l1);background:transparent;color:var(--dsw-alias-label-primary);border-radius:8px;padding:4px 10px;cursor:pointer;font:inherit;font-size:12px;white-space:nowrap}',
+      '.apkvm-update-btn:hover{border-color:var(--dsw-alias-border-l2)}',
+      '.apkvm-update-btn.primary{background:var(--dsw-alias-brand-primary);border-color:transparent;color:var(--dsw-alias-bg-layer-1)}',
+      '.apkvm-update-btn:disabled{opacity:.6;cursor:default}',
+      '.apkvm-settings{display:flex;flex-direction:column;gap:14px;padding:18px;max-width:720px;color:var(--dsw-alias-label-primary)}',
+      '.apkvm-settings h2{font-size:16px;margin:0;font-weight:600}',
+      '.apkvm-setting-group{display:flex;flex-direction:column;gap:10px;border:1px solid var(--dsw-alias-border-l1);border-radius:10px;padding:12px 14px}',
+      '.apkvm-setting-row{display:flex;align-items:center;justify-content:space-between;gap:12px}',
+      '.apkvm-setting-label{display:flex;flex-direction:column;gap:2px;font-size:13px}',
+      '.apkvm-setting-hint{font-size:11px;color:var(--dsw-alias-label-secondary)}',
+      '.apkvm-setting-row input[type=number],.apkvm-setting-row select{background:var(--dsw-alias-bg-layer-1);border:1px solid var(--dsw-alias-border-l1);color:var(--dsw-alias-label-primary);border-radius:8px;padding:4px 8px;font:inherit;font-size:12px}',
+      '.apkvm-settings-actions{display:flex;align-items:center;gap:10px;flex-wrap:wrap}',
+      '.apkvm-settings-error{font-size:12px;color:var(--dsw-alias-state-error-primary)}',
+    ].join('\n');
 
     var CSS_TEXT =
       '.apkvm-page{box-sizing:border-box;position:relative;display:flex;flex-direction:column;width:100%;height:100%;min-height:0;overflow:hidden;background:var(--dsw-alias-bg-base);color:var(--dsw-alias-label-primary);font-size:13px;line-height:1.45}' +
@@ -2239,6 +2355,175 @@ window.__ModuleLoader__.load({
       return wide;
     }
 
+    function createSettingsPanel(getTranslate) {
+      return function ApkVmSettingsPanel(props) {
+        var translate = null;
+        if (props && typeof props.t === 'function') {
+          translate = props.t;
+        } else if (typeof getTranslate === 'function') {
+          translate = getTranslate();
+        }
+        var T = createTranslator(typeof translate === 'function' ? translate : null);
+        var dataState = React.useState(null);
+        var data = dataState[0];
+        var setData = dataState[1];
+        var draftState = React.useState(null);
+        var draft = draftState[0];
+        var setDraft = draftState[1];
+        var statusState = React.useState({ busy: false, message: null, error: null });
+        var status = statusState[0];
+        var setStatus = statusState[1];
+
+        function load() {
+          readPluginSettings().then(function (body) {
+            if (!body) {
+              setStatus({ busy: false, message: null, error: 'settings are unavailable' });
+              return;
+            }
+            setData(body);
+            var next = {};
+            (body.settings || []).forEach(function (item) {
+              next[item.key] = item.value;
+            });
+            setDraft(next);
+          });
+        }
+
+        React.useEffect(function () {
+          load();
+        }, []);
+
+        function updateValue(key, value) {
+          setDraft(function (prev) {
+            var next = Object.assign({}, prev || {});
+            next[key] = value;
+            return next;
+          });
+        }
+
+        function save() {
+          if (!draft) return;
+          setStatus({ busy: true, message: null, error: null });
+          writePluginSettings(draft).then(function (body) {
+            if (body && body.ok) {
+              setStatus({ busy: false, message: T('settings.saved'), error: null });
+            } else {
+              setStatus({ busy: false, message: null, error: (body && body.error) || 'failed' });
+            }
+          });
+        }
+
+        if (!data) {
+          return h(
+            'div',
+            { className: 'apkvm-settings' },
+            h('style', { key: 'apkvm-settings-style' }, PLUGIN_UI_CSS),
+            h('div', { className: 'apkvm-dim' }, T('settings.loading')),
+            status.error ? h('div', { className: 'apkvm-settings-error' }, T('settings.error', { error: status.error })) : null
+          );
+        }
+
+        if (!data.editable) {
+          return h(
+            'div',
+            { className: 'apkvm-settings' },
+            h('style', { key: 'apkvm-settings-style' }, PLUGIN_UI_CSS),
+            h('h2', null, T('settings.title')),
+            h('div', { className: 'apkvm-setting-hint' }, T('settings.readonly', { reason: data.reason || '' }))
+          );
+        }
+
+        var groups = [];
+        (data.settings || []).forEach(function (item) {
+          if (groups.indexOf(item.group) === -1) groups.push(item.group);
+        });
+
+        return h(
+          'div',
+          { className: 'apkvm-settings' },
+          h('style', { key: 'apkvm-settings-style' }, PLUGIN_UI_CSS),
+          h('h2', null, T('settings.title')),
+          h('div', { className: 'apkvm-setting-hint' }, T('settings.subtitle')),
+          groups.map(function (group) {
+            return h(
+              'section',
+              { key: 'group-' + group, className: 'apkvm-setting-group' },
+              h('div', { className: 'apkvm-setting-hint' }, group),
+              (data.settings || [])
+                .filter(function (item) {
+                  return item.group === group;
+                })
+                .map(function (item) {
+                  var value = draft && Object.prototype.hasOwnProperty.call(draft, item.key) ? draft[item.key] : item.value;
+                  var control;
+                  if (item.type === 'boolean') {
+                    control = h('input', {
+                      type: 'checkbox',
+                      checked: value === true,
+                      onChange: function (event) {
+                        updateValue(item.key, event.target.checked);
+                      },
+                    });
+                  } else if (item.type === 'select') {
+                    control = h(
+                      'select',
+                      {
+                        value: String(value),
+                        onChange: function (event) {
+                          updateValue(item.key, event.target.value);
+                        },
+                      },
+                      (item.options || []).map(function (option) {
+                        return h('option', { key: option, value: option }, option);
+                      })
+                    );
+                  } else {
+                    control = h('input', {
+                      type: 'number',
+                      value: value,
+                      min: item.min,
+                      max: item.max,
+                      step: 1,
+                      onChange: function (event) {
+                        updateValue(item.key, Number(event.target.value));
+                      },
+                    });
+                  }
+                  return h(
+                    'div',
+                    { key: item.key, className: 'apkvm-setting-row' },
+                    h(
+                      'div',
+                      { className: 'apkvm-setting-label' },
+                      h('span', null, item.key),
+                      h('span', { className: 'apkvm-setting-hint' }, 'default: ' + String(item.default))
+                    ),
+                    control
+                  );
+                })
+            );
+          }),
+          h(
+            'div',
+            { className: 'apkvm-settings-actions' },
+            h(
+              'button',
+              { type: 'button', className: 'apkvm-update-btn primary', disabled: status.busy, onClick: save },
+              status.busy ? T('settings.saving') : T('settings.save')
+            ),
+            h(
+              'button',
+              { type: 'button', className: 'apkvm-update-btn', onClick: function () { openPluginPage(); } },
+              T('settings.openPlugin')
+            )
+          ),
+          status.message ? h('div', { className: 'apkvm-setting-hint' }, status.message) : null,
+          status.error ? h('div', { className: 'apkvm-settings-error' }, T('settings.error', { error: status.error })) : null,
+          h('div', { className: 'apkvm-setting-hint' }, T('settings.restartHint'))
+        );
+      };
+    }
+
     function createPage(getTranslate) {
       var ActivityCard = createActivityCard(getTranslate);
 
@@ -2251,6 +2536,29 @@ window.__ModuleLoader__.load({
         var embedded = propsSafe.embedded === true;
         var tabVisible = propsSafe.visible === undefined ? true : propsSafe.visible !== false;
         var wideDashboard = useWideDashboard() && !embedded;
+
+        var updateState = React.useState(null);
+        var updateInfo = updateState[0];
+        var setUpdateInfo = updateState[1];
+        var updateDismissedState = React.useState(false);
+        var dismissed = updateDismissedState[0];
+        var setDismissed = updateDismissedState[1];
+
+        React.useEffect(function () {
+          var alive = true;
+          readPluginVersion(false).then(function (info) {
+            if (alive && info) setUpdateInfo(info);
+          });
+          var timer = setInterval(function () {
+            readPluginVersion(false).then(function (info) {
+              if (alive && info) setUpdateInfo(info);
+            });
+          }, 30 * 60 * 1000);
+          return function () {
+            alive = false;
+            clearInterval(timer);
+          };
+        }, []);
 
         /* `main` slot pages do not receive a Session binding, but root-scoped
            pages do get the `useSessions` hook: use it to follow the current
@@ -8129,6 +8437,34 @@ window.__ModuleLoader__.load({
             )
           : null;
 
+        var updateBanner =
+          updateInfo && updateInfo.updateAvailable && !dismissed
+            ? h(
+                'div',
+                { className: 'apkvm-update-banner' },
+                h(
+                  'span',
+                  { className: 'apkvm-update-text' },
+                  T('update.label', { version: updateInfo.latest }) + ' · ' + T('update.hint')
+                ),
+                h(
+                  'button',
+                  { type: 'button', className: 'apkvm-update-btn primary', onClick: function () { openPluginPage(); } },
+                  T('update.open')
+                ),
+                h(
+                  'button',
+                  { type: 'button', className: 'apkvm-update-btn', onClick: function () { openPluginPage(); } },
+                  T('update.settings')
+                ),
+                h(
+                  'button',
+                  { type: 'button', className: 'apkvm-update-btn', onClick: function () { setDismissed(true); } },
+                  T('update.dismiss')
+                )
+              )
+            : null;
+
         var stateErrorBanner =
           stateError && !toast
             ? h(
@@ -8303,7 +8639,9 @@ window.__ModuleLoader__.load({
             onDrop: onPageDrop,
           },
           h('style', { key: 'apkvm-style' }, CSS_TEXT),
+          h('style', { key: 'apkvm-plugin-ui-style' }, PLUGIN_UI_CSS),
           headerEl,
+          updateBanner,
           isMaximized
             ? h(
                 'button',
@@ -8446,6 +8784,13 @@ window.__ModuleLoader__.load({
         };
       }
 
+      try {
+        setPluginNavigationGetter(function () {
+          if (typeof ctx.get !== 'function') return null;
+          return ctx.get('pluginNavigation') || null;
+        });
+      } catch (error) {}
+
       var Page = createPage(getTranslate);
       var Boundary = createBoundary();
       var BoundaryPage = function ApkVmSlot(props) {
@@ -8479,6 +8824,18 @@ window.__ModuleLoader__.load({
           }
         );
       });
+
+      try {
+        var SettingsPanel = createSettingsPanel(getTranslate);
+        slots.inject('plugins.bundle.config', function () {
+          return slots.register(
+            { name: 'plugins.bundle.config', key: BUNDLE_NAME, locale: NS, inject: [] },
+            SettingsPanel
+          );
+        });
+      } catch (error) {
+        // Older DSH builds do not have the plugin settings slot; ignore.
+      }
 
       /* ---- optional dsh-better-sidebar tab integration ----------------- *
        * The service is published by that plugin as `ctx.betterSidebar`; it may

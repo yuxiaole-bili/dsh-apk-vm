@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.14.1 — 2026-11-22
+
+### Added
+
+- Update checks in the panel: the page shows a banner when a newer release is
+  on npm, with **Update now** / **Plugin settings** shortcuts that open this
+  plugin's page in the DSH plugin manager.
+- Plugin settings page: 13 runtime settings (autoStart, prewarm, frameFps,
+  autoSetup, autoReinstall, memoryGuard, maxInstances, sharedResident,
+  sharedSuspendAfterMs, sharedStopAfterMs, armTranslation, lockEnforcement,
+  lockControl) can be edited from `plugins.bundle.config` and are saved
+  through the DSH config editor (the plugin restarts to apply them).
+- Host endpoints `GET /apk-vm/version` and `GET/POST /apk-vm/settings` with
+  validation, min/max bounds and read-only reporting when the profile cannot
+  edit plugin configuration.
+- Full Chinese documentation: `README.zh-CN.md` (linked from the README).
+
 ## 0.14.0 — 2026-11-21
 
 ### Added

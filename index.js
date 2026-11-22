@@ -58,6 +58,17 @@ import { InstalledAppRegistry, defaultInstalledAppsPath, reinstallMissingApps, s
 import { normalizeCameraConfig, normalizeMicConfig, checkPosterFile, mediaLaunchOptions, cameraCapabilities, micCapabilities, micSourceName, remoteAudioPath, remoteMediaPaths, remotePosterPath } from './lib/media.js';
 import { collectLocalInventory, collectRemoteInventory, buildEmulatorInventory } from './lib/emulator-inventory.js';
 
+const PLUGIN_PACKAGE_JSON = JSON.parse(readFileSync(new URL('./package.json', import.meta.url), 'utf8'));
+const PLUGIN_PACKAGE_VERSION = String(PLUGIN_PACKAGE_JSON.version || '0.0.0');
+const UPDATE_CHECK_TTL_MS = 60 * 60 * 1000;
+const UPDATE_CHECK_TIMEOUT_MS = 8000;
+const UPDATE_REGISTRIES = ['https://registry.npmjs.org/dsh-apk-vm/latest', 'https://registry.npmmirror.com/dsh-apk-vm/latest'];
+
+let activePluginConfig = null;
+let mountedHostContext = null;
+let pluginUpdateState = { ready: false, failed: false, checkedAt: null, current: PLUGIN_PACKAGE_VERSION, latest: null, updateAvailable: false, error: null };
+let pluginUpdatePromise = null;
+
 const PLUGIN_VERSION = (() => {
   try {
     return JSON.parse(readFileSync(new URL('./package.json', import.meta.url), 'utf8')).version || 'unknown';
@@ -346,6 +357,149 @@ function resolveApkPath(candidate, roots) {
   throw new Error(`APK file not found: ${raw}`);
 }
 
+function parseVersionParts(value) {
+  return String(value || '0').split(/[^0-9]+/).filter(Boolean).slice(0, 4).map((part) => Number(part) || 0);
+}
+
+function isVersionNewer(latest, current) {
+  const a = parseVersionParts(latest);
+  const b = parseVersionParts(current);
+  for (let index = 0; index < 4; index += 1) {
+    const left = a[index] || 0;
+    const right = b[index] || 0;
+    if (left !== right) return left > right;
+  }
+  return false;
+}
+
+async function checkPluginVersion(force) {
+  const now = Date.now();
+  if (!force && pluginUpdateState.checkedAt && now - pluginUpdateState.checkedAt < UPDATE_CHECK_TTL_MS) {
+    return pluginUpdateState;
+  }
+  if (pluginUpdatePromise) return pluginUpdatePromise;
+  pluginUpdatePromise = (async () => {
+    let latest = null;
+    let error = null;
+    for (const url of UPDATE_REGISTRIES) {
+      try {
+        const response = await fetch(url, {
+          headers: { accept: 'application/json' },
+          signal: AbortSignal.timeout(UPDATE_CHECK_TIMEOUT_MS),
+        });
+        if (!response.ok) throw new Error(`registry responded with ${response.status}`);
+        const body = await response.json();
+        if (body && typeof body.version === 'string' && body.version) {
+          latest = body.version;
+          break;
+        }
+        throw new Error('registry response had no version');
+      } catch (caught) {
+        error = caught;
+      }
+    }
+    pluginUpdateState = {
+      ready: true,
+      failed: latest === null,
+      checkedAt: Date.now(),
+      current: pluginUpdateState.current,
+      latest,
+      updateAvailable: latest !== null && isVersionNewer(latest, pluginUpdateState.current),
+      error: latest === null && error ? String(error.message || error) : null,
+    };
+    return pluginUpdateState;
+  })().finally(() => {
+    pluginUpdatePromise = null;
+  });
+  return pluginUpdatePromise;
+}
+
+const PLUGIN_SETTING_SPECS = [
+  { key: 'autoStart', type: 'boolean', default: true, group: 'runtime' },
+  { key: 'prewarm', type: 'boolean', default: false, group: 'runtime' },
+  { key: 'frameFps', type: 'number', default: 2, min: 1, max: 60, group: 'runtime' },
+  { key: 'autoSetup', type: 'boolean', default: true, group: 'runtime' },
+  { key: 'autoReinstall', type: 'boolean', default: true, group: 'runtime' },
+  { key: 'memoryGuard', type: 'boolean', default: true, group: 'memory' },
+  { key: 'maxInstances', type: 'number', default: 3, min: 1, max: 8, group: 'memory' },
+  { key: 'sharedResident', type: 'boolean', default: true, group: 'memory' },
+  { key: 'sharedSuspendAfterMs', type: 'number', default: 300000, min: 60000, max: 86400000, group: 'memory' },
+  { key: 'sharedStopAfterMs', type: 'number', default: 3600000, min: 60000, max: 86400000, group: 'memory' },
+  { key: 'armTranslation', type: 'boolean', default: false, group: 'advanced' },
+  { key: 'lockEnforcement', type: 'select', default: 'all', options: ['all', 'agents', 'off'], group: 'ownership' },
+  { key: 'lockControl', type: 'select', default: 'all', options: ['all', 'user'], group: 'ownership' },
+];
+
+function pluginSettingsEditable() {
+  return Boolean(mountedHostContext && mountedHostContext.get && mountedHostContext.get('configEditor') && mountedHostContext.fiber && mountedHostContext.fiber.entry);
+}
+
+function collectPluginSettings() {
+  const current = activePluginConfig && typeof activePluginConfig === 'object' ? activePluginConfig : {};
+  const editable = pluginSettingsEditable();
+  const settings = PLUGIN_SETTING_SPECS.map((spec) => {
+    const raw = Object.prototype.hasOwnProperty.call(current, spec.key) ? current[spec.key] : spec.default;
+    return {
+      key: spec.key,
+      type: spec.type,
+      group: spec.group,
+      value: raw,
+      default: spec.default,
+      min: spec.min,
+      max: spec.max,
+      options: spec.options || null,
+    };
+  });
+  const applied = {};
+  for (const item of settings) applied[item.key] = item.value;
+  return {
+    ok: true,
+    version: PLUGIN_PACKAGE_VERSION,
+    profile: 'desktop',
+    source: 'plugin config (cordis.patch.yml)',
+    restartRequired: false,
+    editable,
+    reason: editable ? null : 'The plugin configuration is not editable in this profile (no config editor is available).',
+    settings,
+    applied,
+  };
+}
+
+function validatePluginSettingsPatch(patch) {
+  if (!patch || typeof patch !== 'object' || Array.isArray(patch)) throw new Error('settings patch must be an object');
+  const allowed = new Map(PLUGIN_SETTING_SPECS.map((spec) => [spec.key, spec]));
+  const clean = {};
+  for (const key of Object.keys(patch)) {
+    const spec = allowed.get(key);
+    if (!spec) throw new Error(`unknown setting: ${key}`);
+    const value = patch[key];
+    if (spec.type === 'boolean') {
+      if (typeof value !== 'boolean') throw new Error(`${key} must be a boolean`);
+      clean[key] = value;
+    } else if (spec.type === 'number') {
+      const number = Number(value);
+      if (!Number.isFinite(number)) throw new Error(`${key} must be a number`);
+      if (number < spec.min || number > spec.max) throw new Error(`${key} must be between ${spec.min} and ${spec.max}`);
+      clean[key] = number;
+    } else if (spec.type === 'select') {
+      if (spec.options.indexOf(String(value)) === -1) throw new Error(`${key} must be one of ${spec.options.join(', ')}`);
+      clean[key] = String(value);
+    }
+  }
+  if (Object.keys(clean).length === 0) throw new Error('settings patch is empty');
+  return clean;
+}
+
+async function applyPluginSettingsPatch(patch) {
+  const clean = validatePluginSettingsPatch(patch);
+  if (!pluginSettingsEditable()) throw new Error('configuration is not editable in this profile; edit the plugin row in cordis.patch.yml and reload the plugin instead');
+  const entry = mountedHostContext.fiber.entry;
+  const editor = mountedHostContext.get('configEditor');
+  await editor.edit(entry, (current) => ({ ...(current && typeof current === 'object' ? current : {}), ...clean }));
+  activePluginConfig = { ...(activePluginConfig && typeof activePluginConfig === 'object' ? activePluginConfig : {}), ...clean };
+  return { saved: Object.keys(clean), restartRequired: true };
+}
+
 /**
  * Mount the routes and own the AndroidVm instance.
  * @param ctx cordis host context.
@@ -353,6 +507,7 @@ function resolveApkPath(candidate, roots) {
  */
 export function apply(ctx, config = {}) {
   const cfg = config && typeof config === 'object' ? config : {};
+  activePluginConfig = cfg;
   ALLOW_REMOTE = cfg.allowRemote === true;
   // Media settings must be known before the default AndroidVm is constructed:
   // camera/mic flags are part of the emulator launch argv.
@@ -1781,7 +1936,8 @@ export function apply(ctx, config = {}) {
     return process.env.ANDROID_HOME || process.env.ANDROID_SDK_ROOT || null;
   }
 
-  function mountRoutes(webServer) {
+  function mountRoutes(webServer, hostContext = null) {
+    mountedHostContext = hostContext;
     try {
       serverOrigin = webServer.getOrigin();
     } catch {
@@ -2686,6 +2842,39 @@ export function apply(ctx, config = {}) {
       const body = await stateBody();
       sendJson(res, 200, body);
       maybeAutoSetup('state');
+    });
+
+    register('/apk-vm/version', async (req, res) => {
+      if (req.method !== 'GET' && req.method !== 'HEAD') {
+        sendError(res, 405, 'GET only');
+        return;
+      }
+      const force = requestQuery(req).get('force') === '1';
+      try {
+        const value = await checkPluginVersion(force);
+        sendJson(res, 200, { ok: true, value });
+      } catch (error) {
+        sendJson(res, 200, { ok: true, value: { ...pluginUpdateState, failed: true, error: String(error && error.message || error) } });
+      }
+    });
+
+    register('/apk-vm/settings', async (req, res) => {
+      if (req.method === 'GET' || req.method === 'HEAD') {
+        sendJson(res, 200, collectPluginSettings());
+        return;
+      }
+      if (req.method !== 'POST') {
+        sendError(res, 405, 'GET or POST only');
+        return;
+      }
+      try {
+        const body = await readJsonBody(req);
+        const patch = body && typeof body === 'object' && body.patch && typeof body.patch === 'object' ? body.patch : body;
+        const value = await applyPluginSettingsPatch(patch);
+        sendJson(res, 200, { ok: true, value });
+      } catch (error) {
+        sendJson(res, 400, { ok: false, error: String(error && error.message || error) });
+      }
     });
 
     register('/apk-vm/setup', async (req, res) => {
@@ -4815,7 +5004,7 @@ export function apply(ctx, config = {}) {
   }
 
   ctx.inject(['webServer'], (host) => {
-    host.effect(() => mountRoutes(host.webServer), 'dsh-apk-vm: http routes');
+    host.effect(() => mountRoutes(host.webServer, host), 'dsh-apk-vm: http routes');
   });
 
   // Optional warm start: boot the VM right after the plugin activates so the

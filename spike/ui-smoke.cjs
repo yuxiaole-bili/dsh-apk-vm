@@ -261,7 +261,7 @@ check('every static locale key used by client.js exists in en+zh', missingUsed.l
  * 4. Slot registrations.
  * ------------------------------------------------------------------ */
 
-check('two slots registered', slotRegistrations.length === 2, String(slotRegistrations.length));
+check('three slots registered (main + sidebar + plugin settings)', slotRegistrations.length === 3, String(slotRegistrations.length));
 const mainReg = slotRegistrations.find(function (entry) {
   return entry.spec && entry.spec.name === 'main';
 });
@@ -269,6 +269,10 @@ const sideReg = slotRegistrations.find(function (entry) {
   return entry.spec && entry.spec.name === 'sidebar.panellist';
 });
 check('main slot registered', !!mainReg);
+const settingsReg = slotRegistrations.find(function (entry) {
+  return entry.spec && entry.spec.name === 'plugins.bundle.config';
+});
+check('plugin settings slot registered', !!settingsReg && settingsReg.spec.key === 'dsh-apk-vm');
 check(
   'main slot spec = {name: main, key: apk-vm, locale: apk-vm}',
   !!mainReg &&

@@ -224,6 +224,18 @@ which can fit a third VM.
 
 - `vm-locked`: the VM is hard-locked by its owner; `ownerForce`/takeover does not override a
   lock. The lock owner can `unlock_vm`; the local panel offers Unlock (admin can force-unlock).
+## Panel update banner and plugin settings
+
+The panel checks `GET /apk-vm/version` (npm registry, one-hour cache, 8 s
+timeout) and shows an update banner when a newer release exists. `GET
+/apk-vm/settings` returns the editable plugin settings; `POST /apk-vm/settings`
+accepts a `{ patch: { key: value } }` body, validates it (booleans, numbers
+with min/max, enums) and writes through the DSH config editor, which restarts
+the plugin. Saving needs a profile that can edit plugin configuration; if
+`configEditor` is unavailable the response explains that the values are
+read-only. The panel page also links to the plugin page in the DSH plugin
+manager.
+
 ## Suggested agent instructions
 
 ```text

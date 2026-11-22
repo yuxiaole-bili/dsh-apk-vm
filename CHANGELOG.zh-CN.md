@@ -4,6 +4,21 @@
 0.12.0 之前的历史仅保留在英文文件中。发布时请在 [docs/RELEASING.md](docs/RELEASING.md)
 的检查清单里确认本文件已同步更新。
 
+## 0.14.1 — 2026-11-22
+
+### 新增
+
+- 面板更新检查：有新版本发布到 npm 时，页面顶部显示更新提示条，并提供
+  **前往更新** / **插件设置** 快捷按钮，点击打开 DSH 插件页。
+- 插件设置页：13 项运行设置（autoStart、prewarm、frameFps、autoSetup、
+  autoReinstall、memoryGuard、maxInstances、sharedResident、
+  sharedSuspendAfterMs、sharedStopAfterMs、armTranslation、
+  lockEnforcement、lockControl）可在插件页 `plugins.bundle.config` 中编辑，
+  保存会通过 DSH 配置编辑器写回并重启插件生效。
+- Host 接口 `GET /apk-vm/version` 与 `GET/POST /apk-vm/settings`：带校验、
+  数值范围限制；profile 无法编辑插件配置时返回只读说明。
+- 新增完整中文说明文档 `README.zh-CN.md`（README 顶部有链接）。
+
 ## 0.14.0 — 2026-11-21
 
 ### 新增

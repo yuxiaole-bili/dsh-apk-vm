@@ -6,6 +6,8 @@
 [![GitHub](https://img.shields.io/badge/github-yuxiaole--bili%2Fdsh--apk--vm-181717)](https://github.com/yuxiaole-bili/dsh-apk-vm)
 [![Listed on dsh-plugin.org](https://dsh-plugin.org/badges/listed.svg)](https://dsh-plugin.org/plugins/yuxiaole-bili/dsh-apk-vm)
 
+**完整中文说明（Chinese documentation）：[README.zh-CN.md](README.zh-CN.md)**
+
 **Run a real Android APK inside a local, rooted, open-source Android VM and preview it in the DeepSeek Harness sidebar — streamed as H.264/WebCodecs video at up to 60 fps.**
 
 <p align="center">
@@ -45,7 +47,7 @@ same-origin, loopback-only debug HTTP API and an `apk_vm` Agent tool.
 > 当前 **Windows x64 与 Linux x86_64（headless）为端到端已验证平台**；macOS 仅做探测/CI
 > 覆盖，详见 `docs/LINUX-E2E.md`。
 
-**Status:** `0.12.5` · Apache-2.0 · no npm runtime dependencies · no build step.
+**Status:** `0.14.1` · Apache-2.0 · no npm runtime dependencies · no build step.
 
 This is an open-source DSH plugin published on npm as **`dsh-apk-vm`**. Repository:
 [github.com/yuxiaole-bili/dsh-apk-vm](https://github.com/yuxiaole-bili/dsh-apk-vm).
@@ -1529,6 +1531,28 @@ Windows x64 so far. If you hit a platform issue, include `/apk-vm/setup` output 
 report — it lists exactly which paths were detected.
 
 ---
+
+## Checking for updates and the plugin settings page
+
+The APK VM page shows a small banner when a newer `dsh-apk-vm` release is
+available on npm ("新版本 vX 已发布"). Click **Update now** (前往更新) or
+**Plugin settings** (插件设置) to jump to this plugin's page in the DSH plugin
+manager, where the plugin card links to npm and the GitHub releases.
+
+Most runtime settings can also be edited from that plugin page (the
+`plugins.bundle.config` slot) without hand-editing `cordis.patch.yml`:
+`autoStart`, `prewarm`, `frameFps`, `autoSetup`, `autoReinstall`,
+`memoryGuard`, `maxInstances`, `sharedResident`, `sharedSuspendAfterMs`,
+`sharedStopAfterMs`, `armTranslation`, `lockEnforcement` and
+`lockControl`. Saving writes through the DSH config editor and restarts the
+plugin; the VM keeps running and the panel reconnects automatically. If the
+profile cannot edit plugin configuration, the page says so and the values stay
+read-only.
+
+Endpoints used by the panel: `GET /apk-vm/version` (npm registry lookup with a
+one-hour cache) and `GET /apk-vm/settings` / `POST /apk-vm/settings`
+(current values and validation; unknown keys or out-of-range values are
+rejected).
 
 ## Security
 
